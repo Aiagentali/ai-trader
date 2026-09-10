@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ai-trader Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="header">
+        <h1>⚡ <span>ai-trader</span> Dashboard</h1>
+        <div class="status">
+            <span><span class="status-dot"></span> Connected</span>
+            <span id="clock"></span>
+        </div>
+    </div>
+
+    <div class="grid">
+        <!-- Account Overview -->
+        <div class="card">
+            <h3>Account</h3>
+            <div class="big-number" id="equity">$0.00</div>
+            <div class="stat-row">
+                <span class="stat-label">Today PnL</span>
+                <span class="stat-value" id="today-pnl">$0.00</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Total PnL</span>
+                <span class="stat-value" id="total-pnl">$0.00</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Open Positions</span>
+                <span class="stat-value" id="open-pos">0</span>
+            </div>
+        </div>
+
+        <!-- Performance -->
+        <div class="card">
+            <h3>Performance</h3>
+            <div class="big-number" id="win-rate">0%</div>
+            <div class="stat-row">
+                <span class="stat-label">Total Trades</span>
+                <span class="stat-value" id="total-trades">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Profit Factor</span>
+                <span class="stat-value" id="profit-factor">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Avg R-Multiple</span>
+                <span class="stat-value" id="avg-r">-</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Max Drawdown</span>
+                <span class="stat-value" id="max-dd">-</span>
+            </div>
+        </div>
+
+        <!-- Token Budget -->
+        <div class="card">
+            <h3>Token Budget</h3>
+            <div class="big-number" id="token-used">0 / 200K</div>
+            <div class="stat-row">
+                <span class="stat-label">Input Tokens</span>
+                <span class="stat-value" id="token-in">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Output Tokens</span>
+                <span class="stat-value" id="token-out">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">API Requests</span>
+                <span class="stat-value" id="token-req">0</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" id="token-bar" style="width:0%"></div></div>
+        </div>
+
+        <!-- AI Thesis -->
+        <div class="card">
+            <h3>AI Thesis</h3>
+            <div id="thesis-list"></div>
+        </div>
+
+        <!-- Open Positions -->
+        <div class="card two-col">
+            <h3>Open Positions</h3>
+            <table class="table">
+                <thead><tr>
+                    <th>Symbol</th><th>Dir</th><th>Entry</th>
+                    <th>SL</th><th>TP</th><th>Volume</th>
+                </tr></thead>
+                <tbody id="pos-body"></tbody>
+            </table>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="card two-col">
+            <h3>Recent Trades</h3>
+            <table class="table">
+                <thead><tr>
+                    <th>Time</th><th>Symbol</th><th>Dir</th>
+                    <th>Entry</th><th>Exit</th><th>PnL</th>
+                    <th>R</th><th>Reason</th>
+                </tr></thead>
+                <tbody id="trade-body"></tbody>
+            </table>
+        </div>
+
+        <!-- Daily PnL -->
+        <div class="card two-col">
+            <h3>Daily PnL</h3>
+            <table class="table">
+                <thead><tr>
+                    <th>Date</th><th>Trades</th><th>Win Rate</th><th>PnL</th>
+                </tr></thead>
+                <tbody id="daily-body"></tbody>
+            </table>
+        </div>
+
+        <!-- News -->
+        <div class="card">
+            <h3>Recent News</h3>
+            <div id="news-list"></div>
+        </div>
+
+        <!-- Economic Calendar -->
+        <div class="card">
+            <h3>Upcoming Events</h3>
+            <div id="calendar-list"></div>
+        </div>
+    </div>
+
+    <script>
+    function $(id) { return document.getElementById(id); }
+    function cls(v) { return v >= 0 ? 'positive' : 'negative'; }
+    function fmt$(v) { return v >= 0 ? '$' + v.toFixed(2) : '-$' + Math.abs(v).toFixed(2); }
+
+    async function load() {
+        try {
+            const [ov, pos, trades, perf, thesis, news, cal] = await Promise.all([
+                fetch('/api/overview').then(r=>r.json()),
+                fetch('/api/positions').then(r=>r.json()),
+                fetch('/api/trades').then(r=>r.json()),
+                fetch('/api/performance').then(r=>r.json()),
+                fetch('/api/thesis').then(r=>r.json()),
+                fetch('/api/news').then(r=>r.json()),
+                fetch('/api/calendar').then(r=>r.json()),
+            ]);
+
+            // Account
+            $('equity').textContent = '$' + ov.account.equity.toFixed(2);
+            $('today-pnl').textContent = fmt$(ov.today_pnl);
+            $('today-pnl').className = 'stat-value ' + cls(ov.today_pnl);
+            $('total-pnl').textContent = fmt$(ov.total_pnl);
+            $('total-pnl').className = 'stat-value ' + cls(ov.total_pnl);
+            $('open-pos').textContent = ov.open_positions;
+
+            // Performance
+            const s = perf.summary;
+            $('win-rate').textContent = (s.win_rate || 0) + '%';
+            $('total-trades').textContent = s.total_trades || 0;
+            $('profit-factor').textContent = s.profit_factor || '-';
+            $('avg-r').textContent = (s.avg_r_multiple || 0) + 'R';
+            $('max-dd').textContent = fmt$(s.max_drawdown || 0);
+
+            // Tokens
+            const tk = ov.token_usage;
+            const limit = 200000;
+            const pct = Math.min(100, ((tk.total_tokens||0) / limit * 100));
+            $('token-used').textContent = ((tk.total_tokens||0)/1000).toFixed(0) + 'K / 200K';
+            $('token-in').textContent = (tk.input_tokens||0).toLocaleString();
+            $('token-out').textContent = (tk.output_tokens||0).toLocaleString();
+            $('token-req').textContent = tk.request_count || 0;
+            $('token-bar').style.width = pct + '%';
+
+            // Thesis
+            let th = '';
+            for (const [sym, t] of Object.entries(thesis)) {
+                const biasTag = t.bias === 'bullish' ? 'tag-buy' :
+                               t.bias === 'bearish' ? 'tag-sell' :
+                               t.bias === 'WATCHING_SETUP' ? 'tag-watch' : 'tag-wait';
+                th += `<div class="stat-row">
+                    <span class="stat-label">${sym}</span>
+                    <span class="tag ${biasTag}">${t.bias}</span>
+                </div>`;
+            }
+            $('thesis-list').innerHTML = th || '<div style="color:var(--text-dim)">No thesis data yet</div>';
+
+            // Positions
+            let ph = '';
+            if (pos.length === 0) {
+                ph = '<tr><td colspan="6" style="color:var(--text-dim)">No open positions</td></tr>';
+            } else {
+                pos.forEach(p => {
+                    ph += `<tr>
+                        <td>${p.symbol}</td>
+                        <td><span class="tag tag-${p.direction.toLowerCase()}">${p.direction}</span></td>
+                        <td>${p.entry_price}</td>
+                        <td>${p.stop_loss||'-'}</td>
+                        <td>${p.take_profit||'-'}</td>
+                        <td>${p.volume}</td>
+                    </tr>`;
+                });
+            }
+            $('pos-body').innerHTML = ph;
+
+            // Trades
+            let th2 = '';
+            if (trades.length === 0) {
+                th2 = '<tr><td colspan="8" style="color:var(--text-dim)">No trades yet</td></tr>';
+            } else {
+                trades.slice(0, 15).forEach(t => {
+                    const pnl = t.profit_loss || 0;
+                    th2 += `<tr>
+                        <td>${(t.exit_ts||t.opened_ts||'').slice(0,16)}</td>
+                        <td>${t.symbol}</td>
+                        <td><span class="tag tag-${t.direction.toLowerCase()}">${t.direction}</span></td>
+                        <td>${t.entry}</td>
+                        <td>${t.exit_price||'-'}</td>
+                        <td class="${cls(pnl)}">${fmt$(pnl)}</td>
+                        <td>${t.r_multiple||'-'}</td>
+                        <td>${t.exit_reason||'-'}</td>
+                    </tr>`;
+                });
+            }
+            $('trade-body').innerHTML = th2;
+
+            // Daily PnL
+            let dh = '';
+            if (perf.daily.length === 0) {
+                dh = '<tr><td colspan="4" style="color:var(--text-dim)">No data</td></tr>';
+            } else {
+                perf.daily.slice(-10).reverse().forEach(d => {
+                    dh += `<tr>
+                        <td>${d.date}</td>
+                        <td>${d.trades}</td>
+                        <td>${d.win_rate}%</td>
+                        <td class="${cls(d.pnl)}">${fmt$(d.pnl)}</td>
+                    </tr>`;
+                });
+            }
+            $('daily-body').innerHTML = dh;
+
+            // News
+            let nh = '';
+            if (news.length === 0) {
+                nh = '<div style="color:var(--text-dim)">No news</div>';
+            } else {
+                news.slice(0, 8).forEach(n => {
+                    const impTag = n.importance === 'HIGH' ? 'tag-sell' :
+                                  n.importance === 'MEDIUM' ? 'tag-watch' : 'tag-wait';
+                    nh += `<div class="stat-row">
+                        <span class="stat-label" style="flex:1">${n.title?.slice(0,60)||'-'}</span>
+                        <span class="tag ${impTag}">${n.importance||'LOW'}</span>
+                    </div>`;
+                });
+            }
+            $('news-list').innerHTML = nh;
+
+            // Calendar
+            let ch = '';
+            if (cal.length === 0) {
+                ch = '<div style="color:var(--text-dim)">No upcoming events</div>';
+            } else {
+                cal.slice(0, 8).forEach(e => {
+                    const impTag = e.importance === 'HIGH' ? 'tag-sell' :
+                                  e.importance === 'MEDIUM' ? 'tag-watch' : 'tag-wait';
+                    ch += `<div class="stat-row">
+                        <span class="stat-label" style="flex:1">${e.event} (${e.currency})</span>
+                        <span class="tag ${impTag}">${e.hours_away||'-'}h</span>
+                    </div>`;
+                });
+            }
+            $('calendar-list').innerHTML = ch;
+
+        } catch(e) { console.error('Dashboard load failed:', e); }
+    }
+
+    // Clock
+    function updateClock() {
+        $('clock').textContent = new Date().toLocaleTimeString();
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    load();
+    setInterval(load, 30000); // refresh every 30s
+    </script>
+</body>
+</html>
