@@ -152,14 +152,19 @@ class Agent:
                                           f"REJECTED: {risk_result.reasons_reject}",
                                           decision.get("invalidation", ""), decision)
 
-            elif d in ("MODIFY", "CLOSE"):
+            elif d in ("MODIFY", "PARTIAL_CLOSE", "CLOSE"):
                 if open_positions:
                     pos = next((p for p in open_positions if p["symbol"] == sym), None)
                     if pos:
-                        res = self.execution.close_position(pos["ticket"], reason=d)
-                        log.info(f"close result: {res}")
-                        self.state = AgentState.REVIEWING
-                        self._review_trade(pos["ticket"])
+                        self.state = AgentState.MANAGING_POSITION
+                        from app.execution.trade_manager import TradeManager
+                        tm = TradeManager(self.repo, self.feed, self.execution)
+                        res = tm.manage_position(decision, pos["ticket"])
+                        log.info(f"trade management: {res}")
+                        if res.get("status") in ("CLOSED_SIMULATED", "CLOSED_MT5_DEMO",
+                                                  "PARTIAL_CLOSED_SIMULATED"):
+                            self.state = AgentState.REVIEWING
+                            self._review_trade(pos["ticket"])
 
             # --- periodic normal re-analysis ---
             self.state = AgentState.OBSERVING

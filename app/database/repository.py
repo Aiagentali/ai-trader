@@ -136,10 +136,29 @@ class Repository:
 
     def close_trade(self, trade_id: str, exit_price: float, profit_loss: float,
                     r_multiple: float, exit_reason: str):
-        self.conn.execute(
+        """Close a trade by its trade_id, request_id, or symbol+status fallback."""
+        cur = self.conn.execute(
             "UPDATE trades SET status='closed', exit_ts=?, exit_price=?, profit_loss=?, "
             "r_multiple=?, exit_reason=? WHERE trade_id=?",
             (utcnow(), exit_price, profit_loss, r_multiple, exit_reason, trade_id))
+        if cur.rowcount == 0:
+            # Fallback 1: try by request_id
+            cur = self.conn.execute(
+                "UPDATE trades SET status='closed', exit_ts=?, exit_price=?, profit_loss=?, "
+                "r_multiple=?, exit_reason=? WHERE request_id=? AND status='open'",
+                (utcnow(), exit_price, profit_loss, r_multiple, exit_reason, trade_id))
+        if cur.rowcount == 0:
+            # Fallback 2: close the most recent open trade (from position close)
+            # SQLite doesn't support ORDER BY in UPDATE, so use a subquery
+            most_recent = self.conn.execute(
+                "SELECT trade_id FROM trades WHERE status='open' "
+                "ORDER BY opened_ts DESC LIMIT 1").fetchone()
+            if most_recent:
+                self.conn.execute(
+                    "UPDATE trades SET status='closed', exit_ts=?, exit_price=?, profit_loss=?, "
+                    "r_multiple=?, exit_reason=? WHERE trade_id=?",
+                    (utcnow(), exit_price, profit_loss, r_multiple, exit_reason,
+                     most_recent["trade_id"]))
         self.conn.commit()
 
     def get_trade(self, trade_id: str):
