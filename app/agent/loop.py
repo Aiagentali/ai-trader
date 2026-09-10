@@ -141,6 +141,11 @@ class Agent:
                     versions=self.settings.get("versions", {}))
                 if risk_result.approved:
                     self.state = AgentState.EXECUTING
+                    # Deterministic sizing: risk engine's calculated lots ALWAYS
+                    # override whatever the AI requested (constitution #11).
+                    decision.setdefault("position_size", {})[
+                        "requested_lots"] = risk_result.calculated_lots
+                    decision["risk_percent"] = risk_result.risk_percent
                     res = self.execution.place_order(decision)
                     log.info(f"execution result: {res}")
                     if res.get("status") in ("EXECUTED_SIMULATED",):
@@ -267,8 +272,10 @@ Full thesis history:
 {self.repo.thesis_history(trade['symbol'], limit=24)}"""
         system, user, max_tokens = build_messages(
             "CRITICAL", prompt, "", "", "", "", REVIEW_TASK)
+        import os
+        model_normal = os.environ.get("AI_MODEL_NORMAL", "openai/gpt-4o-mini")
         try:
-            result = self.ai.chat(system, user, "openai/gpt-4o-mini",
+            result = self.ai.chat(system, user, model_normal,
                                   max_tokens=500)
             from app.ai.schemas import parse_json
             obj = parse_json(result["content"])

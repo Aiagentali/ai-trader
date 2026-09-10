@@ -53,6 +53,16 @@ def main():
     calendar = fetch_calendar()
     repo.log_event("calendar_loaded", {"count": len(calendar)})
 
+    # Collect news once at startup so the agent has context
+    try:
+        from app.news.rss import collect
+        news_items = collect(min_importance="MEDIUM")
+        saved = sum(1 for it in news_items if repo.save_news(it))
+        log.info(f"news collected: {len(news_items)} items ({saved} new)")
+        repo.log_event("news_collected", {"total": len(news_items), "new": saved})
+    except Exception as exc:
+        log.warning(f"news collection failed: {exc}")
+
     risk_engine = RiskEngine(risk_cfg, repo, feed, calendar)
     execution = ExecutionEngine(repo, feed, mode,
                                 settings.get("trading", {}).get("live_trading_enabled", False))

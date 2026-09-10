@@ -194,13 +194,17 @@ class Repository:
             "UPDATE positions SET status='closed' WHERE ticket=?", (str(ticket),))
         self.conn.commit()
 
-    def update_position(self, ticket: str, stop_loss=None, take_profit=None):
+    def update_position(self, ticket: str, stop_loss=None, take_profit=None,
+                        volume=None):
         if stop_loss is not None:
             self.conn.execute("UPDATE positions SET stop_loss=? WHERE ticket=?",
                               (stop_loss, str(ticket)))
         if take_profit is not None:
             self.conn.execute("UPDATE positions SET take_profit=? WHERE ticket=?",
                               (take_profit, str(ticket)))
+        if volume is not None:
+            self.conn.execute("UPDATE positions SET volume=? WHERE ticket=?",
+                              (volume, str(ticket)))
         self.conn.commit()
 
     # ---- ai / tokens ----

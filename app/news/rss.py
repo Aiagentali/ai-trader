@@ -5,11 +5,13 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-# Curated, mainstream sources (public RSS)
+# Curated, mainstream sources (public RSS). Verified working feeds first;
+# dead/blocked feeds removed (fxstreet & reuters agency return 0 items).
 FEEDS = {
-    "fxstreet": "https://www.fxstreet.com/rss/news",
+    "forexlive": "https://www.forexlive.com/feed/news",
     "investing_forex": "https://www.investing.com/rss/news_1.rss",
-    "reuters_biz": "https://www.reutersagency.com/feed/?best-topics=business-finance&post_type=best",
+    "yahoo_finance": "https://finance.yahoo.com/news/rssindex",
+    "marketwatch": "https://feeds.marketwatch.com/marketwatch/topstories/",
 }
 
 CURRENCY_KEYWORDS = {

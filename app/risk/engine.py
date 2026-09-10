@@ -59,12 +59,46 @@ def _correlated_count(symbol: str, open_symbols: list) -> int:
     return count
 
 
+class _CalendarListAdapter:
+    """Adapts a plain list of event dicts to the upcoming_events() interface."""
+
+    def __init__(self, events):
+        self._events = events or []
+
+    def upcoming_events(self, currencies=None, within_hours: int = 48):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        out = []
+        for ev in self._events:
+            try:
+                st = datetime.fromisoformat(
+                    str(ev.get("scheduled_time", "")).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                continue
+            delta_h = (st - now).total_seconds() / 3600
+            if not (-1 <= delta_h <= within_hours):
+                continue
+            if currencies is not None and ev.get("currency") not in currencies:
+                continue
+            d = dict(ev)
+            d["hours_away"] = round(delta_h, 2)
+            out.append(d)
+        return out
+
+
 class RiskEngine:
     def __init__(self, config: dict, repo, feed, calendar=None):
         self.cfg = config.get("risk", config)
         self.repo = repo
         self.feed = feed
-        self.calendar = calendar
+        # calendar may be a plain list of event dicts or an object with
+        # upcoming_events() — normalize to the adapter interface.
+        if calendar is None:
+            self.calendar = None
+        elif isinstance(calendar, list):
+            self.calendar = _CalendarListAdapter(calendar)
+        else:
+            self.calendar = calendar
 
     def _normal_spread(self, symbol: str) -> float:
         from app.market.mt5 import MockFeed
@@ -146,7 +180,7 @@ class RiskEngine:
                 f"spread {spread:.5f} > {cfg['max_spread_multiplier']}x normal {normal:.5f}")
 
         # --- news window ---
-        if self.calendar:
+        if self.calendar is not None:
             events = self.calendar.upcoming_events(currencies=set(
                 CURRENCY_LEG.get(symbol, ())), within_hours=1)
             high = [e for e in events if e.get("importance") == "HIGH"]

@@ -91,8 +91,12 @@ class TradeManager:
 
         remaining = round(volume - close_vol, 2)
 
-        # Update position volume
-        self.repo.update_position(str(ticket), stop_loss=position.get("stop_loss"))
+        # Update position volume (remaining), keep SL
+        self.repo.update_position(str(ticket), stop_loss=position.get("stop_loss"),
+                                  volume=remaining)
+        # If nothing remains, close the position record entirely
+        if remaining <= 0:
+            self.repo.close_position(str(ticket))
         # Log partial close as a separate trade record
         partial_trade = {
             "trade_id": f"PARTIAL-{str(uuid.uuid4())[:8]}",
