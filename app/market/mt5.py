@@ -155,8 +155,10 @@ class MT5Feed(MarketDataFeed):
 
     def get_spread(self, symbol: str) -> float:
         info = self.mt5.symbol_info(symbol)
-        tick = self.get_tick(symbol)
-        if info is None or tick is None:
+        if info is None:
+            return None
+        tick = self.mt5.symbol_info_tick(symbol)
+        if tick is None:
             return None
         return tick.ask - tick.bid
 
