@@ -4,6 +4,13 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Load .env file if present
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 from app.config.config_loader import load_settings, load_symbols, load_risk
 from app.logging_util import setup_logging
 from app.database.repository import Repository
