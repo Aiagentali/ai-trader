@@ -35,11 +35,23 @@ def main():
     log.info(f"symbols: {symbols}")
 
     mode = settings.get("execution", {}).get("mode", "simulation")
-    feed_kind = "mock" if mode in ("simulation", "demo") else "mt5"
-    feed = create_feed(seed=42) if feed_kind == "mock" else create_feed("mt5")
-
     repo = Repository()
-    log.info(f"db ready | mode={mode}")
+
+    if mode == "mt5":
+        # MT5-native: real demo orders inside the MetaTrader 5 terminal
+        from app.execution.mt5_native import build_mt5_stack
+        try:
+            exec_engine, feed = build_mt5_stack(repo)
+        except RuntimeError as exc:
+            log.error(str(exc))
+            repo.close()
+            return
+        log.info("db ready | mode=mt5 (real MT5 demo terminal)")
+    else:
+        feed = create_feed(seed=42)
+        log.info(f"db ready | mode={mode}")
+        exec_engine = ExecutionEngine(repo, feed, mode,
+                                      settings.get("trading", {}).get("live_trading_enabled", False))
 
     ai_client = None
     budget = None
@@ -64,11 +76,9 @@ def main():
         log.warning(f"news collection failed: {exc}")
 
     risk_engine = RiskEngine(risk_cfg, repo, feed, calendar)
-    execution = ExecutionEngine(repo, feed, mode,
-                                settings.get("trading", {}).get("live_trading_enabled", False))
 
     if ai_client and budget:
-        agent = Agent(feed, repo, ai_client, budget, risk_engine, execution,
+        agent = Agent(feed, repo, ai_client, budget, risk_engine, exec_engine,
                       symbols, settings)
         agent.run_forever(initial_interval_sec=30)
     else:

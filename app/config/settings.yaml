@@ -24,7 +24,7 @@ news:
   enabled: true
 
 execution:
-  mode: simulation   # simulation | demo | live (live blocked while live_trading_enabled=false)
+  mode: mt5   # simulation (no MT5 needed) | mt5 (real MT5 demo orders in terminal) | live (blocked while live_trading_enabled=false)
 
 versions:
   agent_version: "0.1.0"
