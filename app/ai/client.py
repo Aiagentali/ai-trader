@@ -51,7 +51,6 @@ class OpenAICompatProvider(AIProvider):
                          {"role": "user", "content": user}],
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "response_format": {"type": "json_object"},
         }
         req = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -60,9 +59,33 @@ class OpenAICompatProvider(AIProvider):
                      "Content-Type": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read().decode())
+                raw = resp.read().decode()
         except Exception as e:
             raise AIError(f"AI request failed: {e}") from e
+
+        # Try to parse as JSON
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            # Response might have markdown fences or extra text — try to extract JSON
+            import re
+            match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, re.DOTALL)
+            if match:
+                try:
+                    data = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    raise AIError(f"AI response is not valid JSON: {raw[:200]}")
+            else:
+                # Try to find raw JSON object in the text
+                brace_start = raw.find('{')
+                if brace_start >= 0:
+                    try:
+                        data = json.loads(raw[brace_start:])
+                    except json.JSONDecodeError:
+                        raise AIError(f"AI response is not valid JSON: {raw[:200]}")
+                else:
+                    raise AIError(f"AI response is not valid JSON: {raw[:200]}")
+
         usage = data.get("usage", {})
         return {
             "content": data["choices"][0]["message"]["content"],
