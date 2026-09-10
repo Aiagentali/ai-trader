@@ -1,0 +1,32 @@
+# V1 symbols. Adding a new symbol only requires a new entry here.
+symbols:
+  EURUSD:
+    base: EUR
+    quote: USD
+    enabled: true
+  GBPUSD:
+    base: GBP
+    quote: USD
+    enabled: true
+  USDJPY:
+    base: USD
+    quote: JPY
+    enabled: true
+  USDCHF:
+    base: USD
+    quote: CHF
+    enabled: true
+  AUDUSD:
+    base: AUD
+    quote: USD
+    enabled: true
+  USDCAD:
+    base: USD
+    quote: CAD
+    enabled: true
+
+future_symbols:   # NOT enabled in V1
+  - XAUUSD
+  - NZDUSD
+  - EURJPY
+  - GBPJPY

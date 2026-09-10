@@ -1,0 +1,33 @@
+trading:
+  mode: demo
+  live_trading_enabled: false
+
+symbols:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - USDCHF
+  - AUDUSD
+  - USDCAD
+
+analysis:
+  primary_timeframes: [D1, H4, H1, M15]
+  execution_timeframes: [M5]
+  hourly_analysis: true
+  normal_interval_minutes: 60
+  watch_interval_minutes: 10
+
+ai:
+  daily_token_limit: 200000
+
+news:
+  enabled: true
+
+execution:
+  mode: simulation   # simulation | demo | live (live blocked while live_trading_enabled=false)
+
+versions:
+  agent_version: "0.1.0"
+  prompt_version: 1
+  risk_version: 1
+  knowledge_version: 1

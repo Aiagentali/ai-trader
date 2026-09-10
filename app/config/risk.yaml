@@ -1,0 +1,9 @@
+risk:
+  max_risk_per_trade: 0.005     # 0.5% of balance
+  max_daily_loss: 0.02          # 2% of day-start equity
+  max_open_positions: 5
+  max_correlated_exposure: 2    # max positions sharing a currency leg
+  min_rr: 1.5
+  max_spread_multiplier: 3.0    # reject if spread > 3x normal
+  max_drawdown: 0.10
+  max_consecutive_losses: 4
