@@ -222,8 +222,9 @@ class Agent:
         # --- call AI ---
         import os
         from app.ai.client import estimate_cost
-        model_name = self.settings.get("ai_models", {}).get(level,
-                    "openai/gpt-4o-mini" if level != "CRITICAL" else "openai/gpt-4o")
+        model_normal = os.environ.get("AI_MODEL_NORMAL", "openai/gpt-4o-mini")
+        model_critical = os.environ.get("AI_MODEL_CRITICAL", "openai/gpt-4o")
+        model_name = model_critical if level == "CRITICAL" else model_normal
         try:
             result = self.ai.chat(system, user, model_name, max_tokens=max_tokens)
         except Exception as exc:

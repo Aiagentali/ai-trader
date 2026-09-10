@@ -38,7 +38,7 @@ class OpenAICompatProvider(AIProvider):
     def __init__(self, api_key: str = None, base_url: str = None, timeout: int = 60):
         self.api_key = api_key or os.environ.get("AI_API_KEY", "")
         self.base_url = (base_url or os.environ.get("AI_BASE_URL",
-                         "https://openrouter.ai/api/v1")).rstrip("/")
+                         "https://api.orcarouter.ai/v1")).rstrip("/")
         self.timeout = timeout
         if not self.api_key:
             raise AIError("AI_API_KEY not set")
