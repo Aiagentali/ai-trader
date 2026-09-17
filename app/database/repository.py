@@ -160,6 +160,23 @@ class Repository:
             "VALUES (?,?,?,?)", (trade_id, utcnow(), classification, review))
         self.conn.commit()
 
+    def recent_reviews(self, limit: int = 8) -> list:
+        """Compact 'lessons learned' lines from post-trade reviews, newest first.
+
+        Feeds the learning loop: recent reviews are embedded in every new
+        analysis prompt so past mistakes actually shape future decisions.
+        """
+        rows = self.conn.execute(
+            "SELECT ts, classification, review FROM trade_reviews "
+            "ORDER BY ts DESC, id DESC LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            cls, review = r["classification"], (r["review"] or "").strip()
+            if len(review) > 220:
+                review = review[:217] + "..."
+            out.append(f"[{r['ts'][:10]}] {cls}: {review}")
+        return out
+
     # ---- positions (simulation bookkeeping) ----
     def save_position(self, pos: dict):
         self.conn.execute(

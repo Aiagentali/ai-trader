@@ -68,13 +68,16 @@ LEVELS = {
 
 def build_messages(level: str, market_context: str, news_context: str,
                    calendar_context: str, positions_context: str,
-                   previous_thesis: str, task: str):
+                   previous_thesis: str, task: str,
+                   lessons: str = ""):
     lvl = LEVELS.get(level, LEVELS["NORMAL"])
     system = "\n\n".join([ANALYST_IDENTITY, TRADING_CONSTITUTION, OUTPUT_RULES,
                           f"ANALYSIS LEVEL: {level}. {lvl['instruction']}"])
     user_parts = []
     if previous_thesis:
         user_parts.append(f"## PREVIOUS THESIS (incremental context — do not re-derive)\n{previous_thesis}")
+    if lessons:
+        user_parts.append(f"{LEARNING_HEADER}\n{lessons}")
     user_parts.append(f"## MARKET DATA\n{market_context}")
     if news_context:
         user_parts.append(f"## NEWS (filtered, relevant only)\n{news_context}")
@@ -84,6 +87,11 @@ def build_messages(level: str, market_context: str, news_context: str,
         user_parts.append(f"## OPEN POSITIONS\n{positions_context}")
     user_parts.append(f"## TASK\n{task}")
     return system, "\n\n".join(user_parts), lvl["max_tokens"]
+
+
+LEARNING_HEADER = """## RECENT TRADE LESSONS (from your own post-trade reviews)
+Learn from these. Do not repeat the mistakes described here. Adjust your
+confidence and setup selection accordingly:"""
 
 
 DECISION_TASK = """Decide one of: WAIT, WATCH, BUY, SELL (HOLD/CLOSE/MODIFY only when a position is open).

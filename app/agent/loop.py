@@ -239,9 +239,12 @@ class Agent:
             prev_ctx = f"bias={prev['bias']} regime={prev['regime']} " \
                        f"thesis={prev['thesis']} invalidation={prev['invalidation']}"
 
+        reviews = self.repo.recent_reviews(limit=8)
+        lessons_ctx = "\n".join(reviews) if reviews else ""
+
         system, user, max_tokens = build_messages(
             level, market_context, news_context, calendar_ctx,
-            pos_ctx, prev_ctx, DECISION_TASK)
+            pos_ctx, prev_ctx, DECISION_TASK, lessons=lessons_ctx)
 
         # --- call AI ---
         import os
@@ -316,6 +319,9 @@ Full thesis history:
             obj = parse_json(result["content"])
             cls = obj.get("classification", "DATA_ERROR")
             review = obj.get("review", "")
+            lessons = obj.get("lessons") or []
+            if lessons:
+                review = (review + " Lessons: " + "; ".join(str(l) for l in lessons)).strip()
             self.repo.save_review(trade_id, cls, review)
             log.info(f"review {trade_id}: {cls}")
         except Exception as exc:
