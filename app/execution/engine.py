@@ -18,7 +18,6 @@ class ExecutionEngine:
         self.feed = feed
         self.mode = execution_mode
         self.live_enabled = live_trading_enabled
-        self._sim_ticket = 100000
 
     def place_order(self, decision: dict) -> dict:
         """Returns execution result with unique request_id."""
@@ -52,8 +51,8 @@ class ExecutionEngine:
         raise ValueError(f"unknown execution mode: {self.mode}")
 
     def _sim_order(self, rid, symbol, direction, entry, sl, tps, lots, decision):
-        self._sim_ticket += 1
-        ticket = f"SIM-{self._sim_ticket}"
+        # Persisted positions survive process restarts; counters do not.
+        ticket = f"SIM-{uuid.uuid4()}"
         log.info(f"[SIM] {direction} {symbol} {lots} @ {entry} SL={sl} TP={tps} id={rid}")
 
         pos = {"ticket": ticket, "symbol": symbol, "direction": direction,
@@ -61,8 +60,9 @@ class ExecutionEngine:
                "stop_loss": sl, "take_profit": tps[0] if tps else None}
         self.repo.save_position(pos)
 
+        # trade_id == position ticket: closes by ticket hit the exact trade row
         trade = {
-            "trade_id": rid, "opened_ts": datetime.now(timezone.utc).isoformat(),
+            "trade_id": ticket, "opened_ts": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol, "direction": direction,
             "entry": entry, "stop_loss": sl,
             "take_profit": str(tps),
@@ -104,12 +104,13 @@ class ExecutionEngine:
         risk = abs(entry - sl) * pos["volume"] * 100_000 if sl else 1
         r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
-        trade_id = pos.get("ticket", ticket)
-        # find matching trade by request or latest open for symbol
+        # ticket == trade_id: exact close, no fuzzy reconciliation
         self.repo.close_position(ticket)
-        self.repo.close_trade(trade_id, exit_price, pnl, r_mult, reason)
-        log.info(f"[SIM] CLOSE {ticket} @ {exit_price} PnL={pnl:.2f} R={r_mult}")
-        return {"status": "CLOSED_SIMULATED", "exit_price": exit_price,
+        matched = self.repo.close_trade(ticket, exit_price, pnl, r_mult, reason)
+        log.info(f"[SIM] CLOSE {ticket} @ {exit_price} PnL={pnl:.2f} R={r_mult} "
+                 f"trade_id={matched}")
+        return {"status": "CLOSED_SIMULATED", "trade_id": matched,
+                "exit_price": exit_price,
                 "pnl": round(pnl, 2), "r_mult": r_mult}
 
     def check_sl_tp(self):

@@ -1,5 +1,14 @@
 """Structured JSON schemas + strict validation. Malformed AI output is rejected."""
 import json
+import math
+
+
+def _number(value, field, positive=False):
+    if (type(value) not in (int, float) or
+            (isinstance(value, float) and not math.isfinite(value))):
+        raise SchemaError(f"field {field} must be a finite number")
+    if positive and value <= 0:
+        raise SchemaError(f"field {field} must be positive")
 
 DECISION_SCHEMA = {
     "symbol": str,
@@ -8,11 +17,11 @@ DECISION_SCHEMA = {
     "market_regime": str,
     "setup": str,
     "time_horizon": str,
-    "entry": dict,
-    "stop_loss": (int, float),
-    "take_profit": list,
-    "position_size": dict,
-    "risk_reward": (int, float),
+    "entry": (dict, type(None)),
+    "stop_loss": (int, float, type(None)),
+    "take_profit": (list, type(None)),
+    "position_size": (dict, type(None)),
+    "risk_reward": (int, float, type(None)),
     "thesis": str,
     "technical_analysis": str,
     "price_action_analysis": str,
@@ -63,11 +72,27 @@ def validate_decision(obj: dict, strict: bool = False) -> dict:
     c = obj.get("confidence", 0)
     if not isinstance(c, (int, float)) or isinstance(c, bool) or not 0 <= c <= 100:
         raise SchemaError("confidence must be 0-100")
+    for field in ("stop_loss", "risk_reward"):
+        if obj.get(field) is not None:
+            _number(obj[field], field)
+    entry = obj.get("entry")
+    if entry and "price" in entry and entry["price"] is not None:
+        _number(entry["price"], "entry.price", positive=True)
+    for tp in obj.get("take_profit") or []:
+        _number(tp, "take_profit", positive=True)
+    size = obj.get("position_size")
+    if size and "requested_lots" in size:
+        lots = size["requested_lots"]
+        # WAIT/WATCH/management decisions legitimately carry 0/null sizing;
+        # positivity is enforced for actual trade decisions below.
+        if d in ("BUY", "SELL") or lots is not None:
+            _number(lots, "position_size.requested_lots", positive=bool(d in ("BUY", "SELL") or lots))
     if d in ("BUY", "SELL"):
         missing = REQUIRED_FOR_TRADE - set(obj)
         if missing:
             raise SchemaError(f"trade decision missing fields: {sorted(missing)}")
         sl, entry = obj["stop_loss"], obj["entry"]
+        _number(sl, "stop_loss", positive=True)
         if not isinstance(entry, dict) or "price" not in entry:
             raise SchemaError("entry must include price")
         if not isinstance(obj["take_profit"], list) or not obj["take_profit"]:

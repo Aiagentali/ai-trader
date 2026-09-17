@@ -48,17 +48,17 @@ OUTPUT_RULES = """OUTPUT RULES:
 
 LEVELS = {
     "NORMAL": {
-        "max_tokens": 900,
+        "max_tokens": 2200,
         "instruction": "Produce a compact analysis. Focus on: regime, structure, thesis, "
                        "and whether any setup is forming. Keep each text field under 60 words.",
     },
     "WATCH": {
-        "max_tokens": 600,
+        "max_tokens": 1200,
         "instruction": "A setup is being watched. Evaluate ONLY whether watch conditions "
                        "are met, price distance to trigger, and any change since last check.",
     },
     "CRITICAL": {
-        "max_tokens": 1600,
+        "max_tokens": 2600,
         "instruction": "High-stakes moment (trade decision / open position change / major "
                        "news / regime shift). Full reasoning: technical, price action, "
                        "fundamental, news, invalidation, risks. Be precise about numbers.",
@@ -96,11 +96,11 @@ Return JSON exactly in this schema:
   "market_regime": "TRENDING_UP|TRENDING_DOWN|RANGING|HIGH_VOLATILITY|LOW_VOLATILITY|BREAKOUT|TRANSITION|UNCLEAR",
   "setup": "short setup name or none",
   "time_horizon": "intraday|swing",
-  "entry": {"type": "MARKET|LIMIT", "price": number},
-  "stop_loss": number,
-  "take_profit": [number, ...],
-  "position_size": {"requested_lots": number},
-  "risk_reward": number,
+  "entry": null,
+  "stop_loss": null,
+  "take_profit": [],
+  "position_size": null,
+  "risk_reward": null,
   "thesis": "...",
   "technical_analysis": "...",
   "price_action_analysis": "...",
@@ -111,8 +111,16 @@ Return JSON exactly in this schema:
   "risks": ["..."]
 }
 
+The schema above shows a WAIT response: for WAIT/WATCH you MUST set entry,
+stop_loss, position_size, risk_reward to null and take_profit to [].
+Never write 0 as a placeholder. Only for BUY/SELL replace the nulls with real
+values: entry {"type": "MARKET|LIMIT", "price": <current ask/bid>}, stop_loss,
+non-empty take_profit list, position_size {"requested_lots": <positive number>},
+risk_reward >= 1.0. Keep every text field under 50 words so the JSON fits
+comfortably in the token budget.
+
 If decision is WATCH, fill conditions[] with concrete trigger conditions
-(e.g. "M15 close above 1.0832") and leave entry/stop_loss/take_profit as null or empty."""
+(e.g. "M15 close above 1.0832")."""
 
 MANAGE_TASK = """Open position(s) exist. Decide: HOLD, MODIFY (SL/TP), PARTIAL_CLOSE, or CLOSE.
 

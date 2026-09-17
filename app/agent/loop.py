@@ -39,6 +39,7 @@ class Agent:
         self.state = AgentState.OBSERVING
         self.running = False
         self._watch_queue = {}  # symbol -> next_check_timestamp
+        self._normal_queue = {}
 
     def run_forever(self, initial_interval_sec: int = 10):
         """Main persistent loop. Runs until process killed."""
@@ -84,6 +85,8 @@ class Agent:
 
         for sym in self.symbols:
             # --- watch queue ---
+            if sym in open_symbols:
+                self._watch_queue.pop(sym, None)
             if sym in self._watch_queue:
                 if now < self._watch_queue[sym]:
                     continue
@@ -102,6 +105,12 @@ class Agent:
             else:
                 level = "NORMAL"
 
+            if level == "NORMAL":
+                if now < self._normal_queue.get(sym, 0):
+                    continue
+                self._normal_queue[sym] = now + self.settings.get("analysis", {}).get(
+                    "normal_interval_minutes", 60) * 60
+
             # --- token gate ---
             if not self.budget.check_and_allow(f"analysis_{sym}", level=level):
                 log.warning(f"token budget exhausted — skipping {sym}")
@@ -118,6 +127,17 @@ class Agent:
             log.info(f"{sym} | state={self.state.value} | decision={d} | "
                      f"confidence={decision.get('confidence')}")
 
+            # Non-trade observations are diagnostic records, not approved orders.
+            if d in ("WAIT", "HOLD", "WATCH"):
+                self.repo.save_decision(
+                    request_id=f"decision_{sym}_{time.time_ns()}",
+                    symbol=sym, decision=d, approved=None, reject_reasons=[],
+                    payload=decision, versions=self.settings.get("versions", {}))
+                self.repo.save_thesis(
+                    sym, "WATCHING_SETUP" if d == "WATCH" else d,
+                    decision.get("market_regime", ""), decision.get("thesis", ""),
+                    decision.get("invalidation", ""), decision)
+
             # --- apply decision ---
             if d == "WAIT":
                 self.state = AgentState.WAITING
@@ -127,11 +147,10 @@ class Agent:
                 interval = self.settings.get("analysis", {}).get(
                     "watch_interval_minutes", 10) * 60
                 self._watch_queue[sym] = now + interval
-                self.repo.save_thesis(sym, "WATCHING_SETUP", decision.get("market_regime", ""),
-                                      decision.get("thesis", ""),
-                                      decision.get("invalidation", ""), decision)
 
             elif d in ("BUY", "SELL"):
+                # Nullable AI sizing is unspecified, not an executable size.
+                decision["position_size"] = decision.get("position_size") or {}
                 account = self.feed.get_account_info()
                 risk_result = self.risk.validate(decision, account)
                 self.repo.save_decision(
@@ -229,13 +248,27 @@ class Agent:
         from app.ai.client import estimate_cost
         model_normal = os.environ.get("AI_MODEL_NORMAL", "openai/gpt-4o-mini")
         model_critical = os.environ.get("AI_MODEL_CRITICAL", "openai/gpt-4o")
-        model_name = model_critical if level == "CRITICAL" else model_normal
+        model_watch = os.environ.get("AI_MODEL_WATCH", model_normal)
+        model_name = {"CRITICAL": model_critical, "WATCH": model_watch}.get(level, model_normal)
         try:
             result = self.ai.chat(system, user, model_name, max_tokens=max_tokens)
         except Exception as exc:
             log.error(f"AI call failed: {exc}")
             self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
-            return None
+            from app.ai.client import AIError
+            if isinstance(exc, AIError) and exc.retryable:
+                # one bounded retry — router blips (502/503) are transient
+                import time as _t
+                _t.sleep(5)
+                try:
+                    result = self.ai.chat(system, user, model_name, max_tokens=max_tokens)
+                    log.info("AI retry succeeded")
+                except Exception as exc2:
+                    log.error(f"AI retry failed: {exc2}")
+                    self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
+                    return None
+            else:
+                return None
 
         # --- record tokens ---
         cost = estimate_cost(model_name, result["input_tokens"], result["output_tokens"])
@@ -249,6 +282,8 @@ class Agent:
         try:
             obj = parse_json(result["content"])
             decision = validate_decision(obj)
+            if decision.get("symbol") != symbol:
+                raise SchemaError("AI symbol does not match requested symbol")
             return decision
         except SchemaError as e:
             log.error(f"AI output validation failed: {e}")

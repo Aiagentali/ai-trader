@@ -61,14 +61,7 @@ def _make_client(db_path=None):
     """Create test client. If db_path, override server's global repo."""
     import app.dashboard.server as srv
 
-    if db_path:
-        # Set the global _repo directly — this is what _get_repo() uses
-        from app.database.repository import Repository
-        srv._repo = Repository(db_path=db_path)
-    else:
-        srv._repo = None
-
-    app = srv.create_app()
+    app = srv.create_app({"DATABASE": db_path} if db_path else None)
     app.config["TESTING"] = True
     return app.test_client()
 

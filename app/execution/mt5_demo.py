@@ -146,8 +146,9 @@ class MT5DemoExecutor:
         self.repo.save_position(pos)
 
         # Store trade
+        # trade_id == position ticket: closes by ticket hit the exact trade row
         trade = {
-            "trade_id": request_id, "opened_ts": datetime.now(timezone.utc).isoformat(),
+            "trade_id": str(ticket), "opened_ts": datetime.now(timezone.utc).isoformat(),
             "symbol": symbol, "direction": direction,
             "entry": result.price, "stop_loss": sl,
             "take_profit": str(tps), "position_size": lots,
@@ -221,7 +222,7 @@ class MT5DemoExecutor:
         r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
         self.repo.close_position(str(ticket))
-        self.repo.close_trade(ticket, price, pnl, r_mult, reason)
+        self.repo.close_trade(str(ticket), price, pnl, r_mult, reason)
 
         log.info(f"MT5 close OK: ticket={ticket} price={price} PnL={pnl:.2f}")
         return {"status": "CLOSED_MT5_DEMO", "exit_price": price,

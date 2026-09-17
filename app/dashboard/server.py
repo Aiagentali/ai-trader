@@ -5,58 +5,58 @@ Reads directly from SQLite. No Cloudflare dependency.
 import json
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, Blueprint, current_app, g, jsonify, render_template
 from app.database.repository import Repository
 from app.journal.performance import PerformanceTracker
 
-app = Flask(__name__,
-            template_folder=os.path.join(os.path.dirname(__file__), "templates"),
-            static_folder=os.path.join(os.path.dirname(__file__), "static"))
+dashboard = Blueprint("dashboard", __name__, template_folder="templates", static_folder="static")
 
-_repo = None
+
+_repo_lock = threading.Lock()
 
 
 def _get_repo():
-    global _repo
-    if _repo is None:
-        _repo = Repository()
-    return _repo
+    if "repo" not in g:
+        # Repository.__init__ runs schema init on a second connection; serializing
+        # avoids concurrent WAL pragma contention on the same file.
+        with _repo_lock:
+            g.repo = Repository(current_app.config.get("DATABASE"))
+    return g.repo
 
 
-@app.route("/")
+@dashboard.route("/")
 def index():
     return render_template("index.html")
 
 
-@app.route("/api/overview")
+@dashboard.route("/api/overview")
 def api_overview():
     """Account summary, token usage, system health."""
     repo = _get_repo()
-    acc_rows = repo.conn.execute(
-        "SELECT * FROM trades WHERE status='closed' ORDER BY exit_ts DESC LIMIT 100"
-    ).fetchall()
-    trades = [dict(r) for r in acc_rows]
+    closed = repo.conn.execute(
+        "SELECT profit_loss, exit_ts FROM trades WHERE status='closed'").fetchall()
+    total_pnl = round(sum((r["profit_loss"] or 0) for r in closed), 2)
+
+    # Open positions
+    open_pos = repo.open_positions()
     token = repo.token_usage_today()
 
     # Daily PnL
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    today_pnl = sum((t.get("profit_loss") or 0) for t in trades
-                     if (t.get("exit_ts") or "")[:10] == today)
-    total_pnl = sum((t.get("profit_loss") or 0) for t in trades)
-
-    # Open positions
-    open_pos = repo.open_positions()
+    today_pnl = round(sum((r["profit_loss"] or 0) for r in closed
+                          if (r["exit_ts"] or "")[:10] == today), 2)
 
     # System events (last 10)
     events = repo.conn.execute(
         "SELECT * FROM system_events ORDER BY id DESC LIMIT 10").fetchall()
 
     return jsonify({
-        "account": {"balance": 10000.0, "equity": 10000.0 + total_pnl},
+        "account": {"balance": None, "equity": None, "source": "unavailable"},
         "today_pnl": round(today_pnl, 2),
         "total_pnl": round(total_pnl, 2),
         "open_positions": len(open_pos),
@@ -65,7 +65,7 @@ def api_overview():
     })
 
 
-@app.route("/api/positions")
+@dashboard.route("/api/positions")
 def api_positions():
     """Open positions."""
     repo = _get_repo()
@@ -73,7 +73,7 @@ def api_positions():
     return jsonify(pos)
 
 
-@app.route("/api/trades")
+@dashboard.route("/api/trades")
 def api_trades():
     """Recent closed trades."""
     repo = _get_repo()
@@ -82,7 +82,7 @@ def api_trades():
     return jsonify([dict(r) for r in rows])
 
 
-@app.route("/api/performance")
+@dashboard.route("/api/performance")
 def api_performance():
     """Performance metrics."""
     repo = _get_repo()
@@ -97,7 +97,7 @@ def api_performance():
     })
 
 
-@app.route("/api/thesis")
+@dashboard.route("/api/thesis")
 def api_thesis():
     """Latest thesis per symbol."""
     repo = _get_repo()
@@ -121,7 +121,7 @@ def api_thesis():
     return jsonify(result)
 
 
-@app.route("/api/news")
+@dashboard.route("/api/news")
 def api_news():
     """Recent news."""
     repo = _get_repo()
@@ -129,7 +129,7 @@ def api_news():
     return jsonify(news)
 
 
-@app.route("/api/calendar")
+@dashboard.route("/api/calendar")
 def api_calendar():
     """Upcoming economic events."""
     repo = _get_repo()
@@ -137,7 +137,7 @@ def api_calendar():
     return jsonify(events)
 
 
-@app.route("/api/decisions")
+@dashboard.route("/api/decisions")
 def api_decisions():
     """Recent trade decisions."""
     repo = _get_repo()
@@ -146,7 +146,7 @@ def api_decisions():
     return jsonify([dict(r) for r in rows])
 
 
-@app.route("/api/tokens")
+@dashboard.route("/api/tokens")
 def api_tokens():
     """Token usage breakdown."""
     repo = _get_repo()
@@ -162,10 +162,28 @@ def api_tokens():
     })
 
 
-def create_app():
-    """Factory for external use."""
+def create_app(config=None):
+    from pathlib import Path
+    from app.dashboard.control import register_control
+    app = Flask(__name__)
+    root = Path(__file__).resolve().parents[2]
+    app.config.update(PANEL_ROOT=str(root), PANEL_ENV=str(root / ".env"),
+                      MAX_CONTENT_LENGTH=16384)
+    if config:
+        app.config.update(config)
+    app.register_blueprint(dashboard)
+
+    @app.teardown_appcontext
+    def close_repository(error=None):
+        repo = g.pop("repo", None)
+        if repo:
+            repo.close()
+
+    register_control(app, _get_repo)
     return app
 
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+app = create_app()
+
+if __name__ == "__main__":  # prefer panel.py; kept for direct runs
+    app.run(host="127.0.0.1", port=8000, debug=False, use_reloader=False)
