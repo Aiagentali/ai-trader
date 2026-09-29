@@ -102,10 +102,47 @@ class MT5DemoExecutor:
             price = tick.bid
             order_type = mt5.ORDER_TYPE_SELL
 
-        # Build request
-        point = mt5.symbol_info(symbol).point
-        sl_points = round(abs(price - sl) / point) if sl else 0
-        tp_points = round(abs(tps[0] - price) / point) if tps else 0
+        # Build request.
+        # MT5 takes sl/tp as ABSOLUTE PRICE LEVELS for TRADE_ACTION_DEAL, not as
+        # point distances — sending distances puts the stop far outside the chart
+        # and every order ships without a real stop. Snap both to the symbol's tick
+        # grid and refuse outright if either lands on the wrong side of the price.
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            log.error(f"no symbol info for {symbol} {request_id}")
+            return {"request_id": request_id, "status": "REJECTED",
+                    "reason": "no_symbol_info"}
+        point = info.point
+        digits = getattr(info, "digits", None)
+
+        def snap(value):
+            """Snap a price onto the symbol's tick grid, free of float drift."""
+            if not value:
+                return 0.0
+            snapped = round(value / point) * point
+            return round(snapped, digits) if digits is not None else snapped
+
+        sl_level = snap(sl)
+        tp_level = snap(tps[0]) if tps else 0.0
+
+        if direction == "BUY":
+            if sl and not sl_level < price:
+                log.error(f"REFUSE: BUY SL {sl_level} not below {price} {request_id}")
+                return {"request_id": request_id, "status": "REJECTED",
+                        "reason": "sl_wrong_side"}
+            if tp_level and not tp_level > price:
+                log.error(f"REFUSE: BUY TP {tp_level} not above {price} {request_id}")
+                return {"request_id": request_id, "status": "REJECTED",
+                        "reason": "tp_wrong_side"}
+        else:
+            if sl and not sl_level > price:
+                log.error(f"REFUSE: SELL SL {sl_level} not above {price} {request_id}")
+                return {"request_id": request_id, "status": "REJECTED",
+                        "reason": "sl_wrong_side"}
+            if tp_level and not tp_level < price:
+                log.error(f"REFUSE: SELL TP {tp_level} not below {price} {request_id}")
+                return {"request_id": request_id, "status": "REJECTED",
+                        "reason": "tp_wrong_side"}
 
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
@@ -113,8 +150,8 @@ class MT5DemoExecutor:
             "volume": float(lots),
             "type": order_type,
             "price": price,
-            "sl": sl_points,
-            "tp": tp_points,
+            "sl": sl_level,
+            "tp": tp_level,
             "deviation": 20,
             "magic": 0,
             "comment": f"ai-trader:{request_id}",
@@ -123,7 +160,7 @@ class MT5DemoExecutor:
         }
 
         log.info(f"[MT5 DEMO] {direction} {symbol} {lots} @ {price} "
-                 f"SL={sl} TP={tps[0] if tps else 'none'} id={request_id}")
+                 f"SL={sl_level} TP={tp_level or 'none'} id={request_id}")
 
         result = mt5.order_send(req)
         if result is None:
@@ -243,15 +280,21 @@ class MT5DemoExecutor:
         info = mt5.symbol_info(symbol)
         point = info.point if info else 0.0001
 
-        sl_pts = round(new_sl / point) if new_sl else 0
-        tp_pts = round(new_tp / point) if new_tp else 0
+        # sl/tp are absolute price levels here too, not point distances
+        digits = getattr(info, "digits", None)
+
+        def snap(value):
+            if not value:
+                return 0.0
+            snapped = round(value / point) * point
+            return round(snapped, digits) if digits is not None else snapped
 
         req = {
             "action": mt5.TRADE_ACTION_SLTP,
             "symbol": symbol,
             "position": int(ticket),
-            "sl": sl_pts,
-            "tp": tp_pts,
+            "sl": snap(new_sl),
+            "tp": snap(new_tp),
         }
 
         result = mt5.order_send(req)

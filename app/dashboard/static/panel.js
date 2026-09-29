@@ -1,7 +1,40 @@
 'use strict';
 function formatBytes(value) { return value == null ? '—' : `${Math.round(value / 1048576)} MiB`; }
 function toModelIds(data) { return [...new Set((Array.isArray(data.models) ? data.models : []).map(m => typeof m === 'string' ? m : m.id).filter(m => typeof m === 'string'))]; }
-if (typeof module !== 'undefined') module.exports = {formatBytes, toModelIds};
+const LOG_RANK = {DEBUG: 0, INFO: 1, WARN: 2, WARNING: 2, ERROR: 3, CRITICAL: 4};
+/** Keep only the log lines at or above the selected severity. Unknown lines pass through. */
+function filterLogs(lines, mode) {
+  if (!Array.isArray(lines)) return [];
+  if (!mode || mode === 'all') return lines.slice();
+  const min = LOG_RANK[String(mode).toUpperCase()];
+  if (min === undefined) return lines.slice();
+  return lines.filter(line => {
+    const m = /"level"\s*:\s*"([A-Z]+)"/.exec(String(line));
+    return m ? (LOG_RANK[m[1]] ?? 0) >= min : true;
+  });
+}
+/** Summarise provider health straight from the diagnostics payload. */
+function summariseDiagnostics(d) {
+  if (!d || typeof d !== 'object') return [];
+  const out = [];
+  for (const m of Array.isArray(d.ai_by_model) ? d.ai_by_model : []) {
+    const failed = Number(m.failed || 0);
+    const calls = Number(m.calls || 0);
+    const pct = calls ? Math.round((failed / calls) * 100) : 0;
+    out.push({label: `مدل ${m.model}`, value: `${calls} فراخوانی · ${failed} خطا (${pct}٪)`, bad: failed > 0});
+  }
+  const statuses = d.ai_by_status && typeof d.ai_by_status === 'object' ? d.ai_by_status : {};
+  for (const [status, n] of Object.entries(statuses)) {
+    if (String(status).toLowerCase() !== 'ok') out.push({label: 'وضعیت درخواست‌ها', value: `${status}: ${n}`, bad: true});
+  }
+  const recovered = Array.isArray(d.recovered) ? d.recovered : [];
+  if (recovered.length) out.push({label: 'پاسخ‌های ناقص/بازیابی‌شده', value: String(recovered.length), bad: true});
+  for (const [status, n] of Object.entries(d.decisions_by_kind || {})) {
+    out.push({label: `تصمیم ${status}`, value: String(n), bad: /PARSE_ERROR|REJECTED/.test(String(status))});
+  }
+  return out;
+}
+if (typeof module !== 'undefined') module.exports = {formatBytes, toModelIds, filterLogs, summariseDiagnostics};
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
   const $ = id => document.getElementById(id);
   let csrf = '', refreshing = false, activeTab = 'settings';
@@ -47,17 +80,45 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     for (const [symbol,t] of Object.entries(theses)) { const d = document.createElement('details'), s = document.createElement('summary'), p = document.createElement('p'); s.textContent = `${symbol} · ${t.bias} · ${t.regime}`; p.textContent = t.thesis; d.append(s,p); $('theses').append(d); }
     $('performance').textContent = JSON.stringify(performance.summary ?? performance,null,2);
   }
+  function renderDiagnostics(d) {
+    const root = $('diagnostics'); root.replaceChildren();
+    const rows = summariseDiagnostics(d);
+    if (!rows.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'هنوز داده‌ای برای خلاصه‌سازی وجود ندارد.'; root.append(e); return; }
+    for (const r of rows) {
+      const row = document.createElement('div'); row.className = 'diag-row' + (r.bad ? ' bad' : '');
+      const l = document.createElement('span'); l.textContent = r.label;
+      const v = document.createElement('strong'); v.textContent = r.value;
+      row.append(l, v); root.append(row);
+    }
+  }
   async function debug() {
     const d = await api('/api/debug');
+    renderDiagnostics(d);
     table('ai-requests',d.ai_requests,[['ts','زمان'],['model','مدل'],['status','وضعیت'],['total_tokens','توکن'],['task','کار']]);
     table('decisions',d.decisions,[['ts','زمان'],['symbol','نماد'],['decision','تصمیم'],['reject_reasons','دلایل'],['payload','جزئیات']]);
     table('events',d.events,[['ts','زمان'],['event','رویداد'],['payload','جزئیات']]);
+  }
+  function renderLogs(logs) {
+    const lines = filterLogs(Array.isArray(logs) ? logs : [], $('log-filter').value);
+    $('process-logs').textContent = lines.join('\n') || (Array.isArray(logs) && logs.length ? 'هیچ خطی با این فیلتر مطابقت ندارد.' : 'No process logs yet.');
+    $('log-state').textContent = `${Array.isArray(logs) ? logs.length : 0} خط`;
+  }
+  async function refreshMt5Status() {
+    const box = $('mt5-status');
+    if ($('run-mode').value !== 'mt5') { box.textContent = 'شبیه‌سازی فعال است؛ به MT5 نیازی نیست.'; return; }
+    box.textContent = 'در حال بررسی ترمینال…';
+    try {
+      const s = await api('/api/mt5/status');
+      box.textContent = s.ready ? 'ترمینال MT5 متصل و روی حساب دمو تأیید شد.' : s.reason;
+    } catch (e) { box.textContent = e.message; }
   }
   async function refresh() {
     if (refreshing) return;
     refreshing = true;
     try {
-      const [health,process,overview] = await Promise.all(['/api/health','/api/process','/api/overview'].map(p => api(p)));
+      const [health,process,overview,lastError] = await Promise.all(['/api/health','/api/process','/api/overview','/api/last_error'].map(p => api(p)));
+      overview.ai_failing = lastError.failing ? lastError : null;
+      overview.ai_recent_failures = lastError.recent_failures || 0;
       const memory = health.memory || {};
       $('memory-label').textContent = `${formatBytes(memory.current_bytes)} / ${formatBytes(memory.limit_bytes)}`;
       const pct = memory.percent ?? (memory.limit_bytes ? 100 * memory.current_bytes / memory.limit_bytes : 0);
@@ -68,13 +129,22 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       $('process-detail').textContent = process.running ? `PID ${process.pid}` : `Exit: ${process.exit_code ?? '—'}`;
       $('start-agent').disabled = !!process.running;
       $('stop-agent').disabled = !process.running;
-      $('process-logs').textContent = Array.isArray(process.logs) ? process.logs.join('\n') || 'No process logs yet.' : process.logs || 'No process logs yet.';
+      window.__lastLogs = Array.isArray(process.logs) ? process.logs : [];
+      renderLogs(window.__lastLogs);
       $('token-used').textContent = (overview.token_usage?.total_tokens ?? 0).toLocaleString();
       $('open-pos').textContent = overview.open_positions ?? '—';
       $('pnl-label').textContent = `PnL امروز (ثبت‌شده): ${overview.today_pnl ?? '—'}`;
       if (activeTab === 'monitor') await monitor();
       if (activeTab === 'debug') await debug();
       $('connection').textContent = 'پنل متصل'; $('connection').className = 'badge good';
+      const failing = $('ai-alert');
+      if (overview.ai_failing) {
+        failing.hidden = false;
+        const why = overview.ai_failing.reason ? ` دلیل: ${overview.ai_failing.reason}` : '';
+        failing.textContent = `آخرین خطای AI روی مدل ${overview.ai_failing.model} (${overview.ai_failing.task}) — ${overview.ai_recent_failures} خطا در ۱۵ دقیقهٔ اخیر.${why}`;
+      } else {
+        failing.hidden = true;
+      }
       $('last-update').textContent = `Updated ${new Date().toLocaleTimeString()}`;
     } catch (e) { $('connection').textContent = 'خطای اتصال'; $('connection').className = 'badge bad'; notice(e.message,true); }
     finally { refreshing = false; }
@@ -91,7 +161,15 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   $('start-agent').addEventListener('click', () => action($('start-agent'),async () => { if (!confirm('تریدر در محیط انتخاب‌شده شروع شود؟ شروع می‌تواند درخواست API و سفارش شبیه‌سازی/دمو ایجاد کند.')) return; await api('/api/process/start',{mode:$('run-mode').value}); await refresh(); }));
   $('stop-agent').addEventListener('click', () => action($('stop-agent'),async () => { await api('/api/process/stop',{}); await refresh(); }));
   $('refresh').addEventListener('click',refresh);
-  async function boot() { try { csrf = (await api('/api/session')).csrf_token; await loadSettings(); await refresh(); } catch(e) { notice(e.message,true); $('connection').textContent = 'خطای راه‌اندازی'; } }
+  $('run-mode').addEventListener('change',refreshMt5Status);
+  $('log-filter').addEventListener('change',() => renderLogs((window.__lastLogs || [])));
+  $('log-clear').addEventListener('click',() => { $('process-logs').textContent = 'نما پاک شد (لاگ اصلی در حافظه باقی است).'; });
+  $('log-copy').addEventListener('click',async () => {
+    const text = $('process-logs').textContent || '';
+    try { await navigator.clipboard.writeText(text); notice('لاگ کپی شد.'); }
+    catch { notice('کپی خودکار ممکن نبود؛ متن را دستی انتخاب کنید.', true); }
+  });
+  async function boot() { try { csrf = (await api('/api/session')).csrf_token; await loadSettings(); await refresh(); await refreshMt5Status(); } catch(e) { notice(e.message,true); $('connection').textContent = 'خطای راه‌اندازی'; } }
   boot();
   // No overlapping polls and no background-tab traffic. Never polls the AI provider.
   setInterval(() => { if (!document.hidden) refresh(); },15000);

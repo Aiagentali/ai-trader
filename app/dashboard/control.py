@@ -1,4 +1,5 @@
 """Local-only control API; importing this module never starts trading."""
+import json
 import os
 from pathlib import Path
 from dotenv import dotenv_values
@@ -155,10 +156,106 @@ runpy.run_path('main.py', run_name='__main__')
 """
 
 
+def _strip_control_noise(message: str) -> str:
+    """Cut a log message at the internal error marker so the panel shows the
+    provider's own wording rather than the wrapper's prefix."""
+    for marker in ("AI request failed:", "AI call failed:", "AI retry failed:"):
+        if marker in message:
+            message = message[message.index(marker) + len(marker):]
+    return message.strip()[:300]
+
+
+def _diagnostics(repo, key: str = "") -> dict:
+    """Turn the raw tables into the answers a debugger actually asks for.
+
+    The recurring failures are visible here without reading log lines: which
+    model is actually being used, how often calls error out, how much of the
+    token budget reasoning models eat, and whether any answer was recovered
+    from a truncated completion.
+    """
+    out = {}
+
+    def scrub(value):
+        """Same redaction the row dump applies; a model id is not a safe place
+        for a credential to survive."""
+        if not key or not isinstance(value, str):
+            return value
+        return value.replace(key, "[redacted]")
+
+    try:
+        out["ai_by_model"] = [dict(r) for r in repo.conn.execute(
+            "SELECT model, COUNT(*) AS calls, "
+            "SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) AS ok, "
+            "SUM(CASE WHEN status!='ok' THEN 1 ELSE 0 END) AS failed, "
+            "MAX(ts) AS last_seen "
+            "FROM ai_requests WHERE model IS NOT NULL "
+            "GROUP BY model ORDER BY last_seen DESC LIMIT 10").fetchall()]
+        out["ai_by_model"] = [{k: scrub(v) for k, v in row.items()} for row in out["ai_by_model"]]
+    except Exception as exc:
+        out["ai_by_model_error"] = str(exc)[:200]
+    try:
+        out["ai_by_status"] = {r["status"]: r["n"] for r in repo.conn.execute(
+            "SELECT COALESCE(status,'(none)') AS status, COUNT(*) AS n "
+            "FROM ai_requests GROUP BY status").fetchall()}
+    except Exception as exc:
+        out["ai_by_status_error"] = str(exc)[:200]
+    try:
+        out["decisions_by_kind"] = {r["decision"]: r["n"] for r in repo.conn.execute(
+            "SELECT decision, COUNT(*) AS n FROM trade_decisions "
+            "GROUP BY decision ORDER BY n DESC LIMIT 15").fetchall()}
+    except Exception as exc:
+        out["decisions_by_kind_error"] = str(exc)[:200]
+    try:
+        out["recovered"] = [dict(r) for r in repo.conn.execute(
+            "SELECT symbol, decision, reject_reasons, ts FROM trade_decisions "
+            "WHERE decision IN ('RECOVERED','PARSE_ERROR') "
+            "ORDER BY id DESC LIMIT 20").fetchall()]
+    except Exception as exc:
+        out["recovered_error"] = str(exc)[:200]
+    try:
+        out["trades"] = {r["status"]: r["n"] for r in repo.conn.execute(
+            "SELECT status, COUNT(*) AS n FROM trades GROUP BY status").fetchall()}
+    except Exception as exc:
+        out["trades_error"] = str(exc)[:200]
+    return out
+
+
+def _mt5_status(values) -> dict:
+    """Non-blocking MT5 readiness probe for the panel."""
+    blocked, reason = _mt5_precondition(values)
+    return {"ready": not blocked, "reason": reason}
+
+
+def _mt5_precondition(values) -> tuple:
+    """MT5 may start only when the terminal is present, on a DEMO account, and the
+    package is importable. Returns (blocked, reason). Never enables live trading."""
+    import importlib.util
+    if importlib.util.find_spec("MetaTrader5") is None:
+        return True, ("MT5 package missing. Run: .venv\\Scripts\\python -m pip install MetaTrader5 "
+                      "(Windows only), keep the MT5 terminal open on a DEMO account.")
+    try:
+        import MetaTrader5 as mt5
+    except Exception:
+        return True, "MetaTrader5 package is installed but could not be imported"
+    if not mt5.initialize():
+        return True, ("MetaTrader 5 terminal is not reachable. Open the terminal, log into a "
+                      "DEMO account, then press Test connection again.")
+    try:
+        acc = mt5.account_info()
+        if acc is None:
+            return True, "MT5 connected but account_info() returned nothing; log into the terminal"
+        if acc.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
+            return True, ("Refusing to start: the MT5 account is NOT a demo account. "
+                          "ai-trader is demo-only by design.")
+    finally:
+        mt5.shutdown()
+    return False, ""
+
+
 class OwnedProcess:
     def __init__(self):
         self.child = None
-        self.logs = deque(maxlen=200)
+        self.logs = deque(maxlen=600)
         self.lock = threading.RLock()
         atexit.register(self.stop)
 
@@ -264,7 +361,10 @@ def register_control(app, get_repo):
 
     @app.get("/api/process")
     def process_status():
-        return jsonify(process.status())
+        data = process.status()
+        if request.args.get("logs") == "0":
+            data["logs"] = []
+        return jsonify(data)
 
     @app.post("/api/process/start")
     def process_start():
@@ -279,8 +379,9 @@ def register_control(app, get_repo):
             except ValueError as exc:
                 return jsonify(error=str(exc)), 400
             if values["mode"] == "mt5":
-                return jsonify(error="MT5 execution is disabled pending a safety audit "
-                                     "of stop-loss handling; use simulation"), 409
+                blocked, why = _mt5_precondition(values)
+                if blocked:
+                    return jsonify(error=why), 409
             pressure = memory_health(app)["memory"]["percent"]
             if pressure is not None and pressure >= 92:
                 return jsonify(error="Memory pressure too high (>=92%); stop other "
@@ -338,6 +439,48 @@ def register_control(app, get_repo):
         except Exception:
             return jsonify(ok=False, model=model, latency_ms=round((monotonic()-started)*1000), content="", error="AI request failed; check URL, key, model and provider availability"), 502
 
+    @app.get("/api/last_error")
+    def last_error():
+        """The newest AI failure, with the model that caused it.
+
+        A run can look healthy in the header while every symbol is failing on a
+        dead model id. This is the one question the panel should answer without
+        the operator reading raw lines.
+        """
+        repo = get_repo()
+        try:
+            key = settings(app)["api_key"]
+        except ValueError:
+            key = ""
+        row = repo.conn.execute(
+            "SELECT ts, task, model, status FROM ai_requests "
+            "WHERE status IS NOT NULL AND status != 'ok' ORDER BY id DESC LIMIT 1").fetchone()
+        recent = repo.conn.execute(
+            "SELECT COUNT(*) AS n FROM ai_requests "
+            "WHERE status IS NOT NULL AND status != 'ok' "
+            "AND ts >= datetime('now', '-15 minutes')").fetchone()
+        if row is None:
+            return jsonify(failing=False, recent_failures=int(recent["n"] or 0))
+        model = row["model"]
+        # The reason lives only in the log line. A bare "error" row is useless
+        # to an operator: surface the message the agent actually logged.
+        reason = ""
+        for line in reversed(list(process.logs)):
+            try:
+                entry = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if entry.get("level") != "ERROR":
+                continue
+            msg = str(entry.get("msg", ""))
+            if "AI" in msg:
+                reason = _strip_control_noise(msg)
+                break
+        return jsonify(failing=True, recent_failures=int(recent["n"] or 0),
+                       ts=row["ts"], task=row["task"],
+                       model=(model.replace(key, "[redacted]") if key and model else model),
+                       status=row["status"], reason=reason)
+
     @app.get("/api/debug")
     def debug():
         try:
@@ -356,7 +499,16 @@ def register_control(app, get_repo):
         for name, (table, cols) in columns.items():
             rows = repo.conn.execute(f"SELECT {cols} FROM {table} ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
             result[name] = [{k: (v.replace(key, "[redacted]")[:2048] if key and isinstance(v, str) else v[:2048] if isinstance(v, str) else v) for k, v in dict(row).items()} for row in rows]
+        result["diagnostics"] = _diagnostics(repo, key)
         return jsonify(result)
+
+    @app.get("/api/mt5/status")
+    def mt5_status():
+        try:
+            values = settings(app)
+        except ValueError as exc:
+            return jsonify(ready=False, reason=str(exc)), 400
+        return jsonify(_mt5_status(values))
 
     @app.get("/api/health")
     def health():
