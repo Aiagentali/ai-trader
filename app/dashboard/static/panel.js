@@ -50,7 +50,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       if (data.database_broken) {
         const banner = $('db-alert');
         banner.hidden = false;
-        banner.textContent = `دیتابیس باز نشد. فایل‌های کنار دیتابیس را پاک کن و پنل را دوباره اجرا کن. — ${data.error || ''}`;
+        banner.textContent = `دیتابیس آسیب دیده. در پوشهٔ پروژه این را اجرا کن: .venv\\Scripts\\python recover_db.py — بعد با --apply. جزئیات: ${data.error || ''}`;
         throw new Error('دیتابیس خراب است؛ جزئیات در بالای صفحه.');
       }
       throw new Error(data.error || data.message || `HTTP ${res.status}`);

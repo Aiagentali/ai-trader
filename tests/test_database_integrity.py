@@ -26,9 +26,9 @@ def test_corrupt_database_raises_a_named_error_with_a_recovery_hint(tmp_path):
         get_connection(db)
     message = str(excinfo.value)
     assert "malformed" in message or "not a database" in message
-    # the hint must name the actual files and path
-    assert f"{db}-wal" in message
-    assert f"{db}-shm" in message
+    # the hint must name the real tool, not the sidecar folklore that does nothing
+    assert "recover_db.py" in message
+    assert "ai_trader.db-wal" not in message
 
 
 def test_a_healthy_database_is_unaffected(tmp_path):
@@ -73,7 +73,11 @@ def test_the_panel_shows_a_banner_element_for_it():
     from pathlib import Path
     root = Path(__file__).resolve().parents[1]
     assert 'id="db-alert"' in (root / "app/dashboard/templates/index.html").read_text()
-    assert "db-alert" in (root / "app/dashboard/static/panel.js").read_text()
+    banner = (root / "app/dashboard/static/panel.js").read_text()
+    assert "db-alert" in banner
+    # must name the recovery tool, not the sidecar deletion that does nothing
+    assert "recover_db.py" in banner
+    assert "ai_trader.db-wal" not in banner
 
 
 def test_sidecar_files_can_never_be_committed_again():

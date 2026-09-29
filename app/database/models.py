@@ -148,16 +148,17 @@ class DatabaseCorrupt(RuntimeError):
 
 
 def _corruption_hint(path: str) -> str:
-    """Sidecar files from another copy of the database are the usual cause.
+    """Point at the recovery tool, and say what it will and will not save.
 
-    A stale -wal/-shm left behind by a different build (or a git checkout that
-    carried them across machines) is applied on open and makes SQLite refuse the
-    file. Deleting the sidecars restores the main database, which is the
-    authoritative copy.
+    `database disk image is malformed` means the main file's page content is
+    damaged. Deleting -wal/-shm does not help (a foreign sidecar applied to a
+    healthy main file still opens fine), so do not send anyone down that path.
     """
-    return (f"Delete the sidecar files next to {path} and reopen: "
-            f"del \"{path}-wal\" & del \"{path}-shm\" (or rm -f on macOS/Linux). "
-            f"The main .db file is not affected and keeps all history.")
+    import os
+    return (f"The main file {os.path.basename(path)} is damaged, not its sidecars. "
+            f"Run: .venv\\Scripts\\python recover_db.py (add --apply to write the fix). "
+            f"It copies the file first, salvages every row that still parses, and "
+            f"keeps the broken original as ai_trader.db.corrupt.<timestamp>.")
 
 
 def get_connection(db_path: str = None) -> sqlite3.Connection:
