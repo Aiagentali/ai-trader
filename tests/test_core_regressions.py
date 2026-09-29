@@ -330,11 +330,15 @@ def test_demo_executor_id_linkage_with_fake_mt5(agent):
 
 
 def test_truncated_production_response_cannot_trade(agent, provider, monkeypatch):
+    """Truncation must never trade — not even after the doubled-budget retry."""
     requests = mock_http(monkeypatch, json.dumps(completion("length")))
     agent.ai = provider
     agent._tick()
-    assert len(requests) == 1
+    assert len(requests) == 2  # initial budget + one doubled retry
+    assert [r["max_tokens"] for r in requests] == [requests[0]["max_tokens"],
+                                                    requests[0]["max_tokens"] * 2]
     assert not agent.repo.open_positions()
+    assert not agent.repo.open_trades()
 
 
 def test_repeated_transient_failure_stops_after_two_calls(agent, monkeypatch):
