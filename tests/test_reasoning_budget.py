@@ -64,7 +64,7 @@ def test_stop_finish_reason_never_retries(monkeypatch):
 
 
 def test_length_retry_still_truncated_raises_clean_error(monkeypatch):
-    """Even after the doubled retry the answer is cut → clean, non-crashing AIError."""
+    """Every escalation is exhausted → clean, non-crashing AIError."""
     provider = OpenAICompatProvider(api_key="k", base_url="http://x/v1", timeout=5)
     seen = []
 
@@ -76,4 +76,5 @@ def test_length_retry_still_truncated_raises_clean_error(monkeypatch):
 
     with pytest.raises(AIError):
         provider.chat("sys", "user", "test-model", max_tokens=1000)
-    assert seen == [1000, 2000]
+    # escalation ladder: 1000 -> 2000 -> 4000, then a clean AIError (no crash)
+    assert seen == [1000, 2000, 4000]

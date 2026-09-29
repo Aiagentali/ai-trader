@@ -253,25 +253,33 @@ class Agent:
         model_critical = os.environ.get("AI_MODEL_CRITICAL", "openai/gpt-4o")
         model_watch = os.environ.get("AI_MODEL_WATCH", model_normal)
         model_name = {"CRITICAL": model_critical, "WATCH": model_watch}.get(level, model_normal)
+        from app.ai.client import AIError
         try:
             result = self.ai.chat(system, user, model_name, max_tokens=max_tokens)
-        except Exception as exc:
+        except AIError as exc:
             log.error(f"AI call failed: {exc}")
             self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
-            from app.ai.client import AIError
-            if isinstance(exc, AIError) and exc.retryable:
+            if exc.retryable:
                 # one bounded retry — router blips (502/503) are transient
                 import time as _t
                 _t.sleep(5)
                 try:
                     result = self.ai.chat(system, user, model_name, max_tokens=max_tokens)
                     log.info("AI retry succeeded")
+                except AIError as exc2:
+                    log.error(f"AI retry failed: {exc2}")
+                    self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
+                    return self._salvage_truncated(exc2, system, user, model_name, symbol)
                 except Exception as exc2:
                     log.error(f"AI retry failed: {exc2}")
                     self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
                     return None
             else:
-                return None
+                return self._salvage_truncated(exc, system, user, model_name, symbol)
+        except Exception as exc:
+            log.error(f"AI call failed: {exc}")
+            self.repo.log_ai_request(f"analysis_{symbol}", model_name, 0, 0, 0, symbol, "error")
+            return None
 
         # --- record tokens ---
         cost = estimate_cost(model_name, result["input_tokens"], result["output_tokens"])
@@ -296,6 +304,56 @@ class Agent:
                 reject_reasons=[str(e)], payload={"raw": result["content"][:500]},
                 versions=self.settings.get("versions", {}))
             return None
+
+    def _salvage_truncated(self, exc, system: str, user: str, model: str, symbol: str):
+        """Last resort: rebuild the decision from a budget-truncated completion.
+
+        Only reached when every budget escalation still ran out of tokens. The
+        partial text is repaired into a validated decision so the reasoning is not
+        lost, and the outcome is logged as RECOVERED. A recovered answer can never
+        open or close a position: it is always downgraded to WAIT, because the
+        provider itself told us the completion was cut short.
+        """
+        partial = getattr(exc, "partial", None)
+        if not partial or not partial.strip():
+            return None
+        from app.ai.schemas import parse_json, validate_decision, SchemaError
+        reasoning = getattr(exc, "reasoning_tokens", 0)
+        try:
+            obj = parse_json(partial)
+        except SchemaError as e:
+            log.warning(f"truncated response unusable for {symbol}: {e}")
+            return None
+        # A completion the provider flagged as truncated is missing whatever it was
+        # still writing, so it is NEVER allowed to become a trade. The salvage exists
+        # to preserve the analysis and the audit trail, not to place orders: every
+        # recovered answer is downgraded to WAIT before validation, whatever it asked.
+        if obj.get("decision") in ("BUY", "SELL"):
+            if not _trade_fields_present(obj):
+                log.warning(f"truncated trade answer for {symbol} missing levels -> WAIT")
+            else:
+                log.warning(f"truncated {symbol} answer asked for {obj['decision']} -> WAIT")
+            obj = dict(obj, decision="WAIT", entry=None, stop_loss=None,
+                       take_profit=[], position_size=None, risk_reward=None)
+        try:
+            decision = validate_decision(obj)
+        except SchemaError as e:
+            log.warning(f"truncated response failed validation for {symbol}: {e}")
+            return None
+        if decision.get("symbol") != symbol:
+            log.warning(f"truncated response symbol mismatch for {symbol}")
+            return None
+        log.info(f"recovered truncated {symbol} analysis (reasoning_tokens={reasoning}) "
+                 f"-> {decision.get('decision')}")
+        self.repo.save_decision(
+            request_id=f"recovered_{symbol}_{int(time.time())}",
+            symbol=symbol, decision="RECOVERED", approved=False,
+            reject_reasons=[f"recovered from truncated completion; "
+                            f"reasoning_tokens={reasoning}"],
+            payload={"symbol": symbol, "decision": decision.get("decision")},
+            versions=self.settings.get("versions", {}))
+        decision["_recovered_from_truncation"] = True
+        return decision
 
     def _review_trade(self, trade_id: str):
         """AI post-trade review."""
@@ -330,3 +388,16 @@ Full thesis history:
 
 # needed for _review_trade json.dumps
 import json
+
+
+def _trade_fields_present(decision: dict) -> bool:
+    """A BUY/SELL is only tradable with entry price, stop and at least one target."""
+    from app.ai.schemas import REQUIRED_FOR_TRADE
+    if not REQUIRED_FOR_TRADE.issubset(set(decision)):
+        return False
+    entry = decision.get("entry") or {}
+    if not isinstance(entry, dict) or entry.get("price") is None:
+        return False
+    if decision.get("stop_loss") is None:
+        return False
+    return bool(decision.get("take_profit"))

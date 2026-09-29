@@ -40,16 +40,150 @@ class SchemaError(Exception):
     pass
 
 
+def _strip_fences(text: str) -> str:
+    return (text.strip()
+            .removeprefix("```json").removeprefix("```JSON")
+            .removeprefix("```").removesuffix("```").strip())
+
+
+def _scan_balanced_object(text: str) -> str:
+    """Return the first complete {...} span, ignoring braces inside JSON strings."""
+    start = text.find("{")
+    if start < 0:
+        raise SchemaError("AI output contains no JSON object")
+    depth = 0
+    in_str = False
+    escaped = False
+    for i, ch in enumerate(text[start:], start):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    raise SchemaError("AI output JSON object is not closed (truncated response)")
+
+
+def repair_truncated_json(content: str) -> dict:
+    """Salvage a completion cut short by the token budget.
+
+    Two strategies, in order: close the open structure if nothing is missing
+    (a trailing text field lost its closing quote), else drop trailing elements
+    from the last incomplete array/object until the document closes. A truncated
+    trade answer is never a trading signal: the caller still re-validates, and
+    BUY/SELL need every level field.
+    """
+    text = _strip_fences(content)
+    # strategy 1: the object is missing only its closing characters
+    opener = {"{": "}", "[": "]"}
+    stack = []
+    in_str = False
+    escaped = False
+    for ch in text:
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in opener:
+            stack.append(opener[ch])
+        elif ch in ("}", "]"):
+            if stack and stack[-1] == ch:
+                stack.pop()
+    if stack:
+        # unterminated string: close the quote, then the containers
+        candidate = text + ('"' if in_str else "") + "".join(reversed(stack))
+        obj = _loads(candidate)
+        if isinstance(obj, dict):
+            return obj
+    # strategy 2: walk back element by element
+    for cut in _candidate_cuts(text):
+        obj = _loads(cut)
+        if isinstance(obj, dict):
+            return obj
+    raise SchemaError("AI output could not be repaired from truncated JSON")
+
+
+def _loads(text: str):
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _candidate_cuts(text: str):
+    """Yield progressively shorter prefixes that could close into valid JSON."""
+    start = text.find("{")
+    if start < 0:
+        return
+    in_str = False
+    escaped = False
+    for i in range(len(text) - 1, start, -1):
+        ch = text[i]
+        if ch == '"' and (i == 0 or text[i - 1] != "\\"):
+            in_str = not in_str
+            continue
+        if in_str or ch not in "}],":
+            continue
+        # cut here and close every container still open at this point
+        prefix = text[:i]
+        stack = []
+        in_s = False
+        esc = False
+        for c in prefix:
+            if in_s:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_s = False
+                continue
+            if c == '"':
+                in_s = True
+            elif c == "{":
+                stack.append("}")
+            elif c == "[":
+                stack.append("]")
+            elif c in ("}", "]") and stack and stack[-1] == c:
+                stack.pop()
+        if in_s:
+            prefix += '"'
+        closing = "".join(reversed(stack))
+        trimmed = prefix.rstrip().rstrip(",")
+        if not trimmed.endswith(("{", "[")):
+            trimmed += closing
+        yield trimmed
+
+
 def parse_json(content: str) -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError as e:
-        # tolerate markdown fences
-        stripped = content.strip().removeprefix("```json").removeprefix("```") \
-            .removesuffix("```").strip()
+        stripped = _strip_fences(content)
         try:
             return json.loads(stripped)
         except json.JSONDecodeError:
+            pass
+        # truncated completion: salvage what arrived before the cut
+        try:
+            return repair_truncated_json(content)
+        except SchemaError:
             raise SchemaError(f"AI output is not valid JSON: {e}") from e
 
 

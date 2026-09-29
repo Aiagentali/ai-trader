@@ -22,10 +22,19 @@ PRICING = {
 }
 
 
+# Truncated completions are retried with a larger budget before giving up.
+MAX_BUDGET_ESCALATIONS = 2
+MAX_TOKEN_BUDGET = 8_000
+
+
 class AIError(Exception):
     def __init__(self, message, retryable=False):
         super().__init__(message)
         self.retryable = retryable
+        # partial text of a truncated completion, when the provider returned one —
+        # lets the caller attempt a JSON repair instead of discarding the call
+        self.partial = None
+        self.reasoning_tokens = 0
 
 
 class AIProvider(ABC):
@@ -88,14 +97,17 @@ class OpenAICompatProvider(AIProvider):
 
     def chat(self, system: str, user: str, model: str, max_tokens: int = 1000,
              temperature: float = 0.2) -> dict:
-        """One request; on finish_reason=length, retry ONCE with a doubled budget.
+        """Send a chat request, escalating the token budget while the model truncates.
 
-        Reasoning models (e.g. nex-n2.5) spend most of max_tokens on hidden
-        reasoning tokens, so a 2200-token budget can cut the JSON in half.
-        A single doubled retry fixes that without inflating every request.
+        Reasoning models (nex-n2.5, nemotron) spend 40-70% of max_tokens on hidden
+        reasoning tokens, so a 2200-token budget routinely cuts the JSON in half
+        (finish_reason="length"). The budget is doubled up to MAX_BUDGET_ESCALATIONS
+        times; a still-truncated final attempt raises AIError carrying the partial
+        text so the caller can attempt a JSON repair instead of losing the call.
         """
         budget = int(max_tokens)
-        for attempt in (0, 1):
+        partial = None
+        for attempt in range(MAX_BUDGET_ESCALATIONS + 1):
             payload = {
                 "model": model,
                 "messages": [{"role": "system", "content": system},
@@ -116,9 +128,9 @@ class OpenAICompatProvider(AIProvider):
             except urllib.error.HTTPError as e:
                 status = e.code
                 e.close()  # discard untrusted body; never surface it
-                if attempt == 1:
-                    self._raise_http(status)  # never returns
-                continue
+                if attempt < MAX_BUDGET_ESCALATIONS:
+                    continue  # transient upstream blip: same budget, one more try
+                self._raise_http(status)  # never returns
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 raise AIError("AI transport failed; check endpoint/connectivity and retry",
                               retryable=True) from None
@@ -134,24 +146,38 @@ class OpenAICompatProvider(AIProvider):
                 choice = data["choices"][0]
                 finish = choice.get("finish_reason", "stop")
                 content = choice["message"].get("content")
-            except (ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+                usage = data.get("usage") or {}
+            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
                 raise AIError("Invalid AI response; expected a complete chat-completion JSON "
                               "object (optionally wrapped in data); check router format") from None
 
-            if finish == "length" and attempt == 0:
-                budget = min(budget * 2, 8_000)
-                continue
+            reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0
+            if finish == "length":
+                partial = content if isinstance(content, str) else None
+                if attempt < MAX_BUDGET_ESCALATIONS:
+                    # reasoning tokens are invisible overhead — budget must clear them
+                    headroom = int(reasoning * 1.5) + 512
+                    budget = min(max(budget * 2, budget + headroom), MAX_TOKEN_BUDGET)
+                    continue
+                err = AIError("AI completion incomplete or filtered; no decision accepted")
+                err.partial = partial
+                err.reasoning_tokens = reasoning
+                raise err
             if finish != "stop":
-                raise AIError("AI completion incomplete or filtered; no decision accepted")
+                err = AIError("AI completion incomplete or filtered; no decision accepted")
+                err.partial = partial
+                raise err
             if not isinstance(content, str) or not content.strip():
                 raise AIError("AI returned an empty completion; retry the analysis")
-            usage = data.get("usage") or {}
             counts = [usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)]
             if any(type(n) is not int or n < 0 for n in counts):
                 raise AIError("Invalid AI response; token usage malformed")
             return {"content": content, "input_tokens": counts[0],
-                    "output_tokens": counts[1], "model": data.get("model") or model}
-        raise AIError("AI completion incomplete after retry; no decision accepted")
+                    "output_tokens": counts[1], "model": data.get("model") or model,
+                    "reasoning_tokens": reasoning}
+        err = AIError("AI completion incomplete after retries; no decision accepted")
+        err.partial = partial
+        raise err
 
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
