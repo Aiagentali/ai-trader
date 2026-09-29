@@ -46,7 +46,15 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const res = await fetch(path, {method:body === undefined ? 'GET' : 'POST', headers, body:body === undefined ? undefined : JSON.stringify(body), signal:AbortSignal.timeout(95000)});
     let data;
     try { data = await res.json(); } catch { throw new Error(`پاسخ نامعتبر سرور (HTTP ${res.status})`); }
-    if (!res.ok || data.ok === false) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+    if (!res.ok || data.ok === false) {
+      if (data.database_broken) {
+        const banner = $('db-alert');
+        banner.hidden = false;
+        banner.textContent = `دیتابیس باز نشد. فایل‌های کنار دیتابیس را پاک کن و پنل را دوباره اجرا کن. — ${data.error || ''}`;
+        throw new Error('دیتابیس خراب است؛ جزئیات در بالای صفحه.');
+      }
+      throw new Error(data.error || data.message || `HTTP ${res.status}`);
+    }
     return data;
   }
   function formData() { return Object.fromEntries(new FormData($('ai-settings')).entries()); }

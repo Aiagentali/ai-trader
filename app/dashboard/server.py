@@ -10,6 +10,7 @@ import threading
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from flask import Flask, Blueprint, current_app, g, jsonify, render_template
+from app.database.models import DatabaseCorrupt
 from app.database.repository import Repository
 from app.journal.performance import PerformanceTracker
 
@@ -19,13 +20,24 @@ dashboard = Blueprint("dashboard", __name__, template_folder="templates", static
 _repo_lock = threading.Lock()
 
 
+class ApiProblem(RuntimeError):
+    """A failure the operator can act on; surfaced as JSON, not a traceback."""
+
+
 def _get_repo():
     if "repo" not in g:
         # Repository.__init__ runs schema init on a second connection; serializing
         # avoids concurrent WAL pragma contention on the same file.
         with _repo_lock:
-            g.repo = Repository(current_app.config.get("DATABASE"))
+            try:
+                g.repo = Repository(current_app.config.get("DATABASE"))
+            except DatabaseCorrupt as exc:
+                # A broken database must not print a traceback on every 15s poll
+                # and blank the whole panel. Report it once, as data the UI shows.
+                current_app.logger.error("database unavailable: %s", exc)
+                raise ApiProblem(str(exc))
     return g.repo
+
 
 
 @dashboard.route("/")
@@ -172,6 +184,15 @@ def create_app(config=None):
     if config:
         app.config.update(config)
     app.register_blueprint(dashboard)
+
+    @app.errorhandler(ApiProblem)
+    def _handle_api_problem(exc):
+        """A broken database is operator-actionable data, not a server bug.
+
+        Without this every poll returned a 500 traceback and the panel rendered
+        blank, hiding the one thing the user needed to read.
+        """
+        return jsonify(error=str(exc), database_broken=True), 503
 
     @app.teardown_appcontext
     def close_repository(error=None):

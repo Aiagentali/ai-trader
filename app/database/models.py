@@ -143,6 +143,23 @@ CREATE TABLE IF NOT EXISTS system_events (
 """
 
 
+class DatabaseCorrupt(RuntimeError):
+    """The database file cannot be opened or fails its integrity check."""
+
+
+def _corruption_hint(path: str) -> str:
+    """Sidecar files from another copy of the database are the usual cause.
+
+    A stale -wal/-shm left behind by a different build (or a git checkout that
+    carried them across machines) is applied on open and makes SQLite refuse the
+    file. Deleting the sidecars restores the main database, which is the
+    authoritative copy.
+    """
+    return (f"Delete the sidecar files next to {path} and reopen: "
+            f"del \"{path}-wal\" & del \"{path}-shm\" (or rm -f on macOS/Linux). "
+            f"The main .db file is not affected and keeps all history.")
+
+
 def get_connection(db_path: str = None) -> sqlite3.Connection:
     import os
     if db_path is None:
@@ -151,7 +168,11 @@ def get_connection(db_path: str = None) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError as exc:
+        conn.close()
+        raise DatabaseCorrupt(f"{exc} — {_corruption_hint(db_path)}") from exc
     return conn
 
 

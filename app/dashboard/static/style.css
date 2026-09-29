@@ -12,3 +12,5 @@
 
 .alert{margin:0 0 10px;padding:7px 10px;border:1px solid #ef8e8e55;border-radius:6px;
   background:#ef8e8e14;color:#f0b4b4;font-size:12px}
+
+.alert.danger{border-color:#ef8e8e88;background:#ef8e8e1f;color:#ffc4c4}
