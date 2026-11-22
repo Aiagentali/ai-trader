@@ -27,7 +27,7 @@ function renderSvgCurve(svgId, areaId, lineId, points, initialBalance = 0) {
   const max = Math.max(...vals);
   const range = (max - min) || 1.0;
 
-  const W = 800, H = 220, padY = 20;
+  const W = 800, H = 200, padY = 20;
   const stepX = W / (vals.length - 1);
 
   const coords = vals.map((v, i) => {
@@ -45,10 +45,10 @@ function renderSvgCurve(svgId, areaId, lineId, points, initialBalance = 0) {
     area.setAttribute('d', areaD);
   }
 
-  // Set line color: green if final >= start, else red
+  // Set line color: jade green if final >= start, else crimson red
   const finalVal = vals[vals.length - 1];
   const startVal = initialBalance > 0 ? initialBalance : vals[0];
-  const color = finalVal >= startVal ? '#10b981' : '#ef4444';
+  const color = finalVal >= startVal ? '#10b981' : '#f43f5e';
   line.setAttribute('stroke', color);
   return true;
 }
@@ -100,11 +100,13 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const setTxt = (id, val) => { const el = $(id); if (el && val !== undefined && val !== null) el.textContent = val; };
   const setCls = (id, cls) => { const el = $(id); if (el && cls !== undefined && cls !== null) el.className = cls; };
   let csrf = '', activeTab = 'monitor';
+  let consecutiveNetErrors = 0;
+
   const titles = {
     monitor: 'داشبورد معاملات و رشد سرمایه',
-    settings: 'تنظیمات سیستم و Decision AI',
-    backtest: 'بک‌تست تاریخی و خودآموزی',
-    debug: 'کنسول و لاگ زنده'
+    settings: 'پیکربندی استراتژی و Decision AI',
+    backtest: 'شبیه‌ساز تاریخی و خودآموزی',
+    debug: 'کنسول لاگ زنده و سلامت سیستم'
   };
 
   function notice(text, error = false) {
@@ -113,6 +115,14 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     n.hidden = !text;
     n.textContent = text;
     n.className = error ? 'error' : '';
+  }
+
+  // Safe DOM node builder (pure DOM APIs)
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
   }
 
   async function api(path, body) {
@@ -139,12 +149,13 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   document.querySelectorAll('nav .nav').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('nav .nav').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('section.tab').forEach(s => s.hidden = true);
+      document.querySelectorAll('section.tab-pane').forEach(s => s.hidden = true);
       btn.classList.add('active');
       activeTab = btn.dataset.tab;
       const target = $(activeTab);
       if (target) target.hidden = false;
-      $('page-title').textContent = titles[activeTab] || 'کنترل پنل';
+      const pageTitle = $('page-title');
+      if (pageTitle) pageTitle.textContent = titles[activeTab] || 'میز معاملاتی';
       if (activeTab === 'monitor') refresh();
       if (activeTab === 'settings') loadSettings();
     });
@@ -169,7 +180,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       if ($('cfg-ai-model')) $('cfg-ai-model').value = ai.model || 'gemini-decision-1';
       if ($('cfg-ai-confidence')) $('cfg-ai-confidence').value = ai.min_confidence || 60;
     } catch (e) {
-      logErr('بارگذاری تنظیمات شکست خورد: ' + e.message);
+      console.error('Failed to load settings:', e);
     }
   }
 
@@ -227,25 +238,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // Helper to build DOM elements safely without raw markup injection
-  function el(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined && text !== null) node.textContent = text;
-    return node;
-  }
-
   // --- Test Decision AI Connection ---
-  const testAiBtn = $('test-ai') || $('test-decision-ai-btn');
+  const testAiBtn = $('test-ai');
   testAiBtn?.addEventListener('click', async () => {
     const out = $('ai-test-result');
     testAiBtn.disabled = true;
-    out.textContent = 'در حال ارسال درخواست آزمایشی به گوگل...';
+    out.textContent = 'در حال ارسال درخواست آزمایشی به سرور گوگل...';
     try {
       const res = await api('/api/test_ai', { model: $('cfg-ai-model').value });
-      out.textContent = `پاسخ موفق دریافت شد! زمان تاخیر: ${res.latency_ms}ms\n${res.content || JSON.stringify(res, null, 2)}`;
+      out.textContent = `پاسخ موفق دریافت شد! تاخیر: ${res.latency_ms}ms\n${res.content || JSON.stringify(res, null, 2)}`;
     } catch (e) {
-      out.textContent = `خطا در اتصال: ${e.message}`;
+      out.textContent = `خطا در برقراری ارتباط: ${e.message}`;
     } finally {
       testAiBtn.disabled = false;
     }
@@ -259,18 +262,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     try {
       if (action === 'start') {
         await api('/api/process/start', { mode: 'mt5' });
-        notice('فرآیند تریدر با موفقیت روی حساب دمو متاتریدر ۵ شروع شد.');
+        notice('فرآیند تریدر با موفقیت روی حساب متاتریدر ۵ شروع به کار کرد.');
       } else {
         await api('/api/process/stop', {});
-        notice('تریدر متوقف شد.');
+        notice('فرآیند تریدر متوقف گردید.');
       }
       await refresh();
     } catch (e) {
       const msg = e.message || '';
       if (msg.includes('not reachable') || msg.includes('terminal')) {
-        notice('خطا: نرم‌افزار MetaTrader 5 باز نیست! لطفاً نرم‌افزار متاتریدر ۵ را در ویندوز باز کرده و وارد حساب دمو شوید، سپس دوباره دکمه شروع را بزنید.', true);
+        notice('خطا: ترمینال MetaTrader 5 باز نیست! لطفاً نرم‌افزار متاتریدر ۵ را در ویندوز باز کرده و وارد حساب شوید، سپس مجدداً تلاش کنید.', true);
       } else if (msg.includes('NOT a demo')) {
-        notice('خطای ایمنی: اکانت متاتریدر دمو نیست! ربات فقط روی حساب دمو اجرا می‌شود.', true);
+        notice('خطای ایمنی: اکانت متاتریدر دمو نیست! ربات تنها مجاز به فعالیت روی حساب‌های آزمایشی است.', true);
       } else {
         notice(`خطا در اجرای فرآیند تریدر: ${msg}`, true);
       }
@@ -279,12 +282,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   }
 
-  const startBtn = $('start-agent') || $('quick-start-agent');
-  const stopBtn = $('stop-agent') || $('quick-stop-agent');
+  const startBtn = $('start-agent');
+  const stopBtn = $('stop-agent');
   startBtn?.addEventListener('click', () => toggleTrader('start'));
   stopBtn?.addEventListener('click', () => toggleTrader('stop'));
 
-  // --- Tables Rendering ---
+  // --- Render Positions Table ---
   function renderPositions(rows) {
     const root = $('positions');
     if (!root) return;
@@ -309,17 +312,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const b = document.createElement('tbody');
     rows.forEach(r => {
       const tr = document.createElement('tr');
-      tr.appendChild(el('td', '', String(r.ticket || '—')));
+      tr.appendChild(el('td', '', String(r.ticket || 'N/A')));
       const tdSym = el('td');
       tdSym.appendChild(el('strong', '', r.symbol));
       tr.appendChild(tdSym);
       const tdDir = el('td');
-      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || '—'));
+      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || 'N/A'));
       tr.appendChild(tdDir);
       tr.appendChild(el('td', '', `${r.volume} lot`));
-      tr.appendChild(el('td', '', String(r.entry_price || '—')));
-      tr.appendChild(el('td', '', r.stop_loss ? String(r.stop_loss) : '—'));
-      tr.appendChild(el('td', '', r.take_profit ? String(r.take_profit) : '—'));
+      tr.appendChild(el('td', '', String(r.entry_price || 'N/A')));
+      tr.appendChild(el('td', '', r.stop_loss ? String(r.stop_loss) : 'N/A'));
+      tr.appendChild(el('td', '', r.take_profit ? String(r.take_profit) : 'N/A'));
       const pnl = Number(r.profit_loss || 0);
       const pnlTd = el('td', pnl >= 0 ? 'pill-win' : 'pill-loss', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} $`);
       tr.appendChild(pnlTd);
@@ -355,7 +358,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (!card || !view) return;
     card.hidden = false;
     if (!trades || !trades.length) {
-      if (badge) badge.textContent = '۰ معامله';
+      if (badge) badge.textContent = '0 معامله';
       view.replaceChildren(el('div', 'empty', 'در این بازه تاریخی هیچ ستاپی طبق فیلترهای استراتژی صادر نشد (فیلترهای مومنتوم ADX و عدم ورود در رِنج مانع ورود پرریسک شدند).'));
       return;
     }
@@ -431,7 +434,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const root = $('trades');
     if (!root) return;
 
-    // Count by asset class
+    // Filter by asset class
     const cryptoTrades = cachedTrades.filter(r => (r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
     const tradfiTrades = cachedTrades.filter(r => !(r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
 
@@ -446,7 +449,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.replaceChildren();
     if (!displayRows || !displayRows.length) {
       const msg = activeTradeFilter === 'crypto'
-        ? 'هنوز معامله‌ای در بازار کریپتو بسته نشده است (با اضافه کردن BTCUSD یا ETHUSD فعال می‌شود).'
+        ? 'هنوز معامله‌ای در بازار کریپتو بسته نشده است (با افزودن BTCUSD یا ETHUSD فعال می‌شود).'
         : 'هیچ معامله بسته‌شده‌ای در این دسته‌بندی وجود ندارد.';
       root.appendChild(el('div', 'empty', msg));
       return;
@@ -481,16 +484,16 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       // Direction
       const tdDir = el('td');
-      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || '—'));
+      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || 'N/A'));
       tr.appendChild(tdDir);
 
       // Volume
       tr.appendChild(el('td', '', `${r.position_size || 0.01} lot`));
 
       // Entry & Exit
-      const entryVal = r.entry != null ? String(r.entry) : (r.entry_price != null ? String(r.entry_price) : '—');
+      const entryVal = r.entry != null ? String(r.entry) : (r.entry_price != null ? String(r.entry_price) : 'N/A');
       tr.appendChild(el('td', '', entryVal));
-      tr.appendChild(el('td', '', r.exit_price != null ? String(r.exit_price) : '—'));
+      tr.appendChild(el('td', '', r.exit_price != null ? String(r.exit_price) : 'N/A'));
 
       // PnL
       tr.appendChild(el('td', pnlClass, pnlText));
@@ -506,7 +509,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.appendChild(t);
   }
 
-  // --- Main Refresh Loop ---
+  // --- Main Real-Time Refresh Loop ---
   async function refresh() {
     try {
       // 1. Session & CSRF
@@ -515,7 +518,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         csrf = sess.csrf_token;
       }
 
-      // 2. Overview & Process State
+      // 2. Overview & Process State Fetch
       const [overview, proc, perf, pos, trades, theses] = await Promise.all([
         api('/api/overview').catch(() => ({})),
         api('/api/process').catch(() => ({ state: 'UNKNOWN' })),
@@ -525,16 +528,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         api('/api/thesis').catch(() => ({}))
       ]);
 
+      // Reset network error count on success
+      consecutiveNetErrors = 0;
+
       // Header & Process buttons
       const isRunning = Boolean(proc.running || proc.state === 'RUNNING');
       setTxt('process-state', isRunning ? 'فعال و آنلاین' : 'متوقف');
-      setCls('process-state', isRunning ? 'good' : 'bad');
-      const startEl = $('start-agent') || $('quick-start-agent');
-      const stopEl = $('stop-agent') || $('quick-stop-agent');
+      setCls('process-state', `kpi-val ${isRunning ? 'good' : 'bad'}`);
+      const startEl = $('start-agent');
+      const stopEl = $('stop-agent');
       if (startEl) startEl.disabled = isRunning;
       if (stopEl) stopEl.disabled = !isRunning;
-      setTxt('connection', isRunning ? 'متاتریدر متصل است' : 'آماده به کار');
-      setCls('connection', 'badge ' + (isRunning ? 'good' : ''));
+      setTxt('connection', isRunning ? 'ترمینال متصل است' : 'آماده به کار');
+      setCls('connection', 'telemetry-pill ' + (isRunning ? 'good' : ''));
 
       // Database Alert check
       const dbAlert = $('db-alert');
@@ -553,7 +559,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       if (acc.balance != null) {
         setTxt('live-balance', `$${acc.balance.toFixed(2)}`);
         setTxt('live-equity', `Equity: $${acc.equity?.toFixed(2) || acc.balance.toFixed(2)}`);
-        setTxt('sidebar-account-desc', `لایو دمو (${acc.server || 'MT5'}) · لاگین: ${acc.login || '—'}`);
+        setTxt('sidebar-account-desc', `لایو دمو (${acc.server || 'MT5'}) · لاگین: ${acc.login || 'N/A'}`);
       } else {
         setTxt('live-balance', `$${bal.toFixed(2)}`);
         setTxt('live-equity', `Equity: $${bal.toFixed(2)}`);
@@ -563,17 +569,17 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const todayPnl = Number(overview.today_pnl || 0);
       const todayPct = Number(overview.today_pnl_percent || (bal > 0 ? (todayPnl / bal * 100) : 0));
       setTxt('today-pnl', `${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)} $`);
-      setCls('today-pnl', todayPnl >= 0 ? 'good' : 'bad');
+      setCls('today-pnl', `kpi-val num ${todayPnl >= 0 ? 'good' : 'bad'}`);
       setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}% امروز`);
-      setCls('today-pnl-pct', todayPnl >= 0 ? 'good' : 'bad');
+      setCls('today-pnl-pct', `kpi-sub num ${todayPnl >= 0 ? 'good' : 'bad'}`);
 
       // Total PnL & Percentage
       const totalPnl = Number(overview.total_pnl || 0);
       const totalPct = Number(overview.total_pnl_percent || (totalPnl / 30.0 * 100));
       setTxt('total-pnl', `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} $`);
-      setCls('total-pnl', totalPnl >= 0 ? 'good' : 'bad');
+      setCls('total-pnl', `kpi-val num ${totalPnl >= 0 ? 'good' : 'bad'}`);
       setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}% بازدهی کل`);
-      setCls('total-pnl-pct', totalPnl >= 0 ? 'good' : 'bad');
+      setCls('total-pnl-pct', `kpi-sub num ${totalPnl >= 0 ? 'good' : 'bad'}`);
 
       setTxt('open-pos', `${(pos || []).length} معامله باز`);
 
@@ -581,10 +587,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const sum = perf.summary || {};
       const totalTrades = Number(sum.total_trades || (trades || []).length);
       const winRate = Number(sum.win_rate || 0);
-      setTxt('kpi-winrate', totalTrades ? `${winRate.toFixed(1)}%` : '—');
-      setTxt('winrate-badge', `وین‌ریت: ${totalTrades ? winRate.toFixed(0) + '%' : '—'}`);
-      setTxt('kpi-pf', totalTrades && sum.profit_factor != null ? (sum.profit_factor >= 99 ? 'Max' : Number(sum.profit_factor).toFixed(2)) : '—');
-      setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)}` : '0 $');
+      setTxt('kpi-winrate', totalTrades ? `${winRate.toFixed(1)}%` : 'N/A');
+      setTxt('winrate-badge', `وین‌ریت: ${totalTrades ? winRate.toFixed(0) + '%' : '0%'}`);
+      setTxt('kpi-pf', totalTrades && sum.profit_factor != null ? (sum.profit_factor >= 99 ? 'Max' : Number(sum.profit_factor).toFixed(2)) : 'N/A');
+      setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)}` : '$0.00');
 
       // Crypto vs TradFi Asset Breakdown
       const cStats = sum.crypto_stats || {};
@@ -593,23 +599,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const tPnl = Number(tStats.total_pnl != null ? tStats.total_pnl : totalPnl);
 
       setTxt('crypto-pnl', `${cPnl >= 0 ? '+' : ''}${cPnl.toFixed(2)} $`);
-      setCls('crypto-pnl', cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral'));
+      setCls('crypto-pnl', `deck-value num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
       setTxt('crypto-pct', `${Number(cStats.return_percent || 0) >= 0 ? '+' : ''}${Number(cStats.return_percent || 0).toFixed(1)}% بازدهی`);
-      setCls('crypto-pct', `pct-pill ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
+      setCls('crypto-pct', `deck-badge num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
       setTxt('crypto-count', String(cStats.trades || 0));
       setTxt('crypto-wl', `${cStats.wins || 0} برد / ${cStats.losses || 0} باخت`);
-      setTxt('crypto-winrate', cStats.trades ? `${cStats.win_rate}%` : '—');
-      setTxt('crypto-pf', cStats.trades ? `ضریب سود: ${cStats.profit_factor}` : 'ضریب سود: —');
+      setTxt('crypto-winrate', cStats.trades ? `${cStats.win_rate}%` : 'N/A');
+      setTxt('crypto-pf', cStats.trades ? `ضریب سود: ${cStats.profit_factor}` : 'ضریب سود: N/A');
 
       setTxt('tradfi-pnl', `${tPnl >= 0 ? '+' : ''}${tPnl.toFixed(2)} $`);
-      setCls('tradfi-pnl', tPnl >= 0 ? 'good' : 'bad');
+      setCls('tradfi-pnl', `deck-value num ${tPnl >= 0 ? 'good' : 'bad'}`);
       const retVal = Number(tStats.return_percent != null ? tStats.return_percent : totalPct);
       setTxt('tradfi-pct', `${retVal >= 0 ? '+' : ''}${retVal.toFixed(1)}% بازدهی`);
-      setCls('tradfi-pct', `pct-pill ${tPnl >= 0 ? 'good' : 'bad'}`);
+      setCls('tradfi-pct', `deck-badge num ${tPnl >= 0 ? 'good' : 'bad'}`);
       setTxt('tradfi-count', String(tStats.trades != null ? tStats.trades : totalTrades));
       setTxt('tradfi-wl', `${tStats.wins != null ? tStats.wins : (sum.wins || 0)} برد / ${tStats.losses != null ? tStats.losses : (sum.losses || 0)} باخت`);
-      setTxt('tradfi-winrate', tStats.trades ? `${tStats.win_rate}%` : (totalTrades ? `${winRate.toFixed(1)}%` : '—'));
-      setTxt('tradfi-pf', tStats.trades ? `ضریب سود: ${tStats.profit_factor}` : `ضریب سود: ${sum.profit_factor || '—'}`);
+      setTxt('tradfi-winrate', tStats.trades ? `${tStats.win_rate}%` : (totalTrades ? `${winRate.toFixed(1)}%` : 'N/A'));
+      setTxt('tradfi-pf', tStats.trades ? `ضریب سود: ${tStats.profit_factor}` : `ضریب سود: ${sum.profit_factor || 'N/A'}`);
 
       // Dynamic backtest symbols sync from active watchlist
       if (theses && Object.keys(theses).length > 0) {
@@ -626,18 +632,23 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       renderPositions(pos);
       renderTrades(trades);
 
-      // Theses
+      // Theses & Market Regimes
       const thBox = $('theses');
       if (thBox) {
         thBox.replaceChildren();
-        for (const [sym, t] of Object.entries(theses)) {
-          const d = document.createElement('details');
-          const s = document.createElement('summary');
-          const p = document.createElement('p');
-          s.textContent = `${sym} · ${t.bias || 'WAIT'} · ${t.regime || 'UNCLEAR'}`;
-          p.textContent = t.thesis || 'درحال تحلیل بازار…';
-          d.append(s, p);
-          thBox.appendChild(d);
+        const thEntries = Object.entries(theses);
+        if (!thEntries.length) {
+          thBox.appendChild(el('div', 'empty', 'در حال حاضر هیچ نمادی برای تحلیل ثبت نشده است.'));
+        } else {
+          for (const [sym, t] of thEntries) {
+            const d = document.createElement('details');
+            const s = document.createElement('summary');
+            const p = document.createElement('p');
+            s.textContent = `${sym} : ${t.bias || 'WAIT'} : ${t.regime || 'UNCLEAR'}`;
+            p.textContent = t.thesis || 'درحال تحلیل ساختار تکنیکال مارکت...';
+            d.append(s, p);
+            thBox.appendChild(d);
+          }
         }
       }
 
@@ -689,7 +700,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
             head.append(symTag, catTag);
 
             const pDesc = el('p', '', t.persian_desc || t.thesis || 'در حال پایش دیتای زنده مارکت...');
-            const sm = el('small', '', `وضعیت تکنیکال: ${t.regime || '—'} · سیگنال: ${t.bias || 'WAIT'}`);
+            const sm = el('small', '', `وضعیت تکنیکال: ${t.regime || 'نامشخص'} : سیگنال: ${t.bias || 'WAIT'}`);
 
             card.append(head, pDesc, sm);
             filterGrid.appendChild(card);
@@ -697,15 +708,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         }
       }
 
-      // Live Logs (Robust rendering)
+      // Live Logs & Output View
       const logsEl = $('process-logs');
       if (logsEl) {
         const rawLogs = (proc && Array.isArray(proc.logs) && proc.logs.length) ? proc.logs : [];
         const lines = filterLogs(rawLogs, $('log-filter')?.value);
         if (lines.length) {
+          const isAtBottom = logsEl.scrollHeight - logsEl.clientHeight <= logsEl.scrollTop + 50;
           logsEl.textContent = lines.join('\n');
+          if (isAtBottom) {
+            logsEl.scrollTop = logsEl.scrollHeight;
+          }
         } else if (isRunning) {
-          logsEl.textContent = 'فرآیند تریدر فعال است و در حال اتصال و اجرای چرخه معاملاتی می‌باشد…';
+          logsEl.textContent = 'فرآیند تریدر فعال است و در حال اتصال و اجرای چرخه معاملاتی می‌باشد...';
         } else {
           logsEl.textContent = 'فرآیند تریدر متوقف است. برای شروع، دکمه «شروع تریدر» را در بالای صفحه فشار دهید.';
         }
@@ -714,12 +729,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       setTxt('last-update', `آخرین به‌روزرسانی: ${new Date().toLocaleTimeString('fa-IR')}`);
     } catch (e) {
       console.error('Refresh loop error:', e);
-      const isNet = (e instanceof TypeError && e.message && e.message.toLowerCase().includes('fetch')) ||
-                    (e.name === 'AbortError') ||
-                    (e.message && (e.message.includes('HTTP') || e.message.includes('Failed to fetch')));
-      if (isNet) {
+      consecutiveNetErrors++;
+      // Only switch status to error after 3 consecutive failures to avoid flickering
+      if (consecutiveNetErrors >= 3) {
         setTxt('connection', 'خطا در شبکه');
-        setCls('connection', 'badge bad');
+        setCls('connection', 'telemetry-pill bad');
       }
     }
   }
@@ -739,7 +753,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const res = await api('/api/backtest/run', payload);
       $('bt-final-bal').textContent = `$${res.final_balance.toFixed(2)}`;
       $('bt-net-pnl').textContent = `${res.net_profit >= 0 ? '+' : ''}$${res.net_profit.toFixed(2)} (${res.return_percent}%)`;
-      $('bt-net-pnl').className = res.net_profit >= 0 ? 'good' : 'bad';
+      $('bt-net-pnl').className = `kpi-val num ${res.net_profit >= 0 ? 'good' : 'bad'}`;
       $('bt-winrate').textContent = `${res.win_rate}% (${res.wins} برد / ${res.losses} باخت)`;
       $('bt-trades-count').textContent = `${res.total_trades} ترید`;
       $('bt-pf-badge').textContent = `Profit Factor: ${res.profit_factor}`;
@@ -774,11 +788,11 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       $('bt-final-bal').textContent = `$${finBal.toFixed(2)}`;
       const retP = ((Number(res.net_profit || 0) / payload.balance) * 100).toFixed(1);
       $('bt-net-pnl').textContent = `${Number(res.net_profit || 0) >= 0 ? '+' : ''}$${Number(res.net_profit || 0).toFixed(2)} (${retP}%)`;
-      $('bt-net-pnl').className = Number(res.net_profit || 0) >= 0 ? 'good' : 'bad';
+      $('bt-net-pnl').className = `kpi-val num ${Number(res.net_profit || 0) >= 0 ? 'good' : 'bad'}`;
       $('bt-winrate').textContent = `${res.win_rate}%`;
       $('bt-trades-count').textContent = `${res.total_trades} ترید`;
       $('bt-pf-badge').textContent = `Profit Factor: ${res.optimized_profit_factor}`;
-      $('bt-summary-title').textContent = `آموزش ${res.symbol} پایان یافت! ضریب سود به ${res.optimized_profit_factor} جهش یافت (${res.total_trades} معامله).`;
+      $('bt-summary-title').textContent = `آموزش ${res.symbol} پایان یافت! ضریب سود به ${res.optimized_profit_factor} ارتقا یافت (${res.total_trades} معامله).`;
 
       // Render lessons learned
       const lBox = $('bt-lessons-box');
@@ -795,7 +809,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       renderSvgCurve('bt-equity-svg', 'bt-area', 'bt-line', res.equity_curve || [], payload.balance);
       renderBacktestTrades(res.trades || []);
-      notice('پارامترهای بهینه‌شده ذخیره شدند و درس‌ها در حافظه ربات ثبت گردیدند.');
+      notice('پارامترهای بهینه‌شده ذخیره شدند و درس‌ها در حافظه سیستم ثبت گردیدند.');
     } catch (e) {
       notice(e.message, true);
       $('bt-summary-title').textContent = `خطا در بهینه‌سازی: ${e.message}`;
@@ -804,13 +818,13 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // --- Log Tools ---
+  // --- Log View Tools ---
   $('log-copy')?.addEventListener('click', () => {
     const txt = $('process-logs').textContent;
-    navigator.clipboard.writeText(txt).then(() => notice('لاگ‌ها با موفقیت کپی شدند.'));
+    navigator.clipboard.writeText(txt).then(() => notice('لاگ‌ها با موفقیت در کلیپ‌بورد کپی شدند.'));
   });
   $('log-clear')?.addEventListener('click', () => {
-    $('process-logs').textContent = 'نما پاک شد.';
+    $('process-logs').textContent = 'نمای لاگ پاک شد.';
   });
   $('refresh')?.addEventListener('click', refresh);
 
