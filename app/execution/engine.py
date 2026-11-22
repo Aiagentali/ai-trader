@@ -2,6 +2,7 @@
 import uuid
 import logging
 from datetime import datetime, timezone
+from app.risk.engine import contract_size
 
 log = logging.getLogger("ai-trader.execution")
 
@@ -97,11 +98,12 @@ class ExecutionEngine:
         exit_price = tick["bid"] if pos["direction"] == "BUY" else tick["ask"]
         sl = pos["stop_loss"]
         entry = pos["entry_price"]
+        c_size = contract_size(pos["symbol"])
         if pos["direction"] == "BUY":
-            pnl = (exit_price - entry) * pos["volume"] * 100_000
+            pnl = (exit_price - entry) * pos["volume"] * c_size
         else:
-            pnl = (entry - exit_price) * pos["volume"] * 100_000
-        risk = abs(entry - sl) * pos["volume"] * 100_000 if sl else 1
+            pnl = (entry - exit_price) * pos["volume"] * c_size
+        risk = abs(entry - sl) * pos["volume"] * c_size if sl else 1
         r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
         # ticket == trade_id: exact close, no fuzzy reconciliation

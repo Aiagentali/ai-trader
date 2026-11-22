@@ -797,7 +797,7 @@ class TestConfig:
         s = load_symbols()
         assert "EURUSD" in s["symbols"]
         assert s["symbols"]["EURUSD"]["enabled"] is True
-        assert "XAUUSD" in s["future_symbols"]
+        assert "XAUUSD" in s.get("symbols", {}) or "XAUUSD" in s.get("future_symbols", [])
 
     def test_load_risk(self):
         from app.config.config_loader import load_risk

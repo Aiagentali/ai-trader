@@ -36,10 +36,18 @@ class Agent:
         self.execution = execution
         self.symbols = symbols
         self.settings = settings
+        self.use_market_watch = self.settings.get("trading", {}).get("use_market_watch", False)
+        self._last_mw_sync = 0
         self.state = AgentState.OBSERVING
         self.running = False
         self._watch_queue = {}  # symbol -> next_check_timestamp
         self._normal_queue = {}
+        engine_cfg = self.settings.get("trading", {}).get("engine")
+        self.engine_mode = engine_cfg if engine_cfg else ("ai" if self.ai else "quant")
+        from app.strategy.quant_engine import QuantEngine
+        self.quant = QuantEngine(settings=self.settings)
+        from app.strategy.decision_ai import DecisionAI
+        self.decision_ai = DecisionAI(settings=self.settings, client=self.ai)
 
     def run_forever(self, initial_interval_sec: int = 10):
         """Main persistent loop. Runs until process killed."""
@@ -78,10 +86,19 @@ class Agent:
         # --- SL/TP hit check first ---
         self.execution.check_sl_tp()
 
+        now = time.time()
+
+        # --- dynamic market watch sync ---
+        if self.use_market_watch and (now - self._last_mw_sync > 30):
+            self._last_mw_sync = now
+            if hasattr(self.feed, "get_market_watch_symbols"):
+                mw_syms = self.feed.get_market_watch_symbols()
+                if mw_syms and set(mw_syms) != set(self.symbols):
+                    log.info(f"Market Watch updated dynamically: {mw_syms}")
+                    self.symbols = mw_syms
+
         open_positions = self.repo.open_positions()
         open_symbols = {p["symbol"] for p in open_positions}
-
-        now = time.time()
 
         for sym in self.symbols:
             # --- watch queue ---
@@ -108,22 +125,40 @@ class Agent:
             if level == "NORMAL":
                 if now < self._normal_queue.get(sym, 0):
                     continue
-                self._normal_queue[sym] = now + self.settings.get("analysis", {}).get(
-                    "normal_interval_minutes", 60) * 60
+                default_interval = 1 if self.engine_mode == "quant" else 60
+                interval_min = self.settings.get("analysis", {}).get(
+                    "normal_interval_minutes", default_interval)
+                self._normal_queue[sym] = now + interval_min * 60
 
-            # --- token gate ---
-            if not self.budget.check_and_allow(f"analysis_{sym}", level=level):
-                log.warning(f"token budget exhausted — skipping {sym}")
-                continue
-
-            # --- observe → analyze → decide ---
-            self.state = AgentState.ANALYZING
-            decision = self._analyze_symbol(sym, level)
+            # --- analyze & decide (Quant vs AI) ---
+            if self.engine_mode == "quant" or not self.ai:
+                self.state = AgentState.ANALYZING
+                decision = self.quant.analyze_symbol(sym, self.feed)
+            else:
+                # --- token gate for AI ---
+                if self.budget and not self.budget.check_and_allow(f"analysis_{sym}", level=level):
+                    log.warning(f"token budget exhausted — skipping {sym}")
+                    continue
+                self.state = AgentState.ANALYZING
+                decision = self._analyze_symbol(sym, level)
 
             if decision is None:
                 continue
 
             d = decision.get("decision", "WAIT")
+
+            # --- Optional Decision AI Gate (Jev-inspired fast classification) ---
+            if d in ("BUY", "SELL") and getattr(self, "decision_ai", None) and self.decision_ai.enabled:
+                ai_eval = self.decision_ai.evaluate_setup(decision, decision.get("market_context", {}))
+                if not ai_eval.get("approve", True):
+                    log.info(f"{sym} | Decision AI rejected: {ai_eval.get('reason')}")
+                    d = "WAIT"
+                    decision["decision"] = "WAIT"
+                    decision["thesis"] = f"[Decision AI: {ai_eval.get('reason')}] " + decision.get("thesis", "")
+                else:
+                    log.info(f"{sym} | Decision AI approved: {ai_eval.get('reason')}")
+                    decision["thesis"] += f" | Decision AI: {ai_eval.get('reason')}"
+
             log.info(f"{sym} | state={self.state.value} | decision={d} | "
                      f"confidence={decision.get('confidence')}")
 

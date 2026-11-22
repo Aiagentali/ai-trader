@@ -1,17 +1,491 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>AI Trader · Local Console</title><link rel="stylesheet" href="/static/style.css"><script src="/static/panel.js" defer></script></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Trader Pro · کنترل پنل هوشمند</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
+  <script src="/static/panel.js" defer></script>
+</head>
 <body>
-<aside><div class="brand" dir="ltr"><span class="brand-mark">AT</span><span>ai-trader<small>LOCAL CONSOLE</small></span></div><nav aria-label="بخش‌ها"><button class="nav active" data-tab="settings">تنظیمات AI <span>01</span></button><button class="nav" data-tab="monitor">وضعیت معاملات <span>02</span></button><button class="nav" data-tab="debug">دیباگ و لاگ <span>03</span></button></nav><div class="sidebar-note"><span class="badge">DEMO ONLY</span><p>فقط شبیه‌سازی یا حساب دمو.<br>اجرای پنل، تریدر را شروع نمی‌کند.</p></div></aside>
-<main><header><div><span class="eyebrow">WORKSPACE / LOCAL</span><h1 id="page-title">تنظیمات هوش مصنوعی</h1></div><div class="header-actions"><span id="connection" class="badge">در حال اتصال…</span><button id="refresh" aria-label="تازه‌سازی اطلاعات">تازه‌سازی</button></div></header>
-<div id="notice" role="status" aria-live="polite" hidden></div>
-<div id="ai-alert" class="alert" role="alert" hidden></div>
-<div id="db-alert" class="alert danger" role="alert" hidden></div>
-<section class="metrics" aria-label="وضعیت سیستم"><article><span>پردازش تریدر</span><strong id="process-state">—</strong><small id="process-detail">در حال بررسی</small></article><article><span>حافظه محیط</span><strong id="memory-label">—</strong><div class="meter"><i id="memory-bar"></i></div><small id="memory-detail">محدودیت واقعی محیط، نه رم کل میزبان</small></article><article><span>توکن امروز</span><strong id="token-used">—</strong><small>مصرف ثبت‌شده در دیتابیس</small></article><article><span>پوزیشن باز</span><strong id="open-pos">—</strong><small id="pnl-label">سود و زیان ثبت‌شده</small></article></section>
-<section id="settings" class="tab">
-<div class="columns"><article class="card"><div class="card-heading"><div><h2>اتصال و مسیریابی مدل‌ها</h2><p>OpenAI-compatible · 9router · OpenRouter</p></div><span id="key-status" class="badge">کلید نامشخص</span></div>
-<form id="ai-settings" autocomplete="off"><label for="base-url">آدرس API <span>Base URL</span></label><input id="base-url" name="base_url" dir="ltr" type="url" placeholder="http://127.0.0.1:20128/v1" required><label for="api-key">کلید دسترسی <span>API key</span></label><input id="api-key" name="api_key" dir="ltr" type="password" autocomplete="new-password" placeholder="خالی بگذارید تا کلید قبلی حفظ شود"><p class="hint">کلید ذخیره‌شده دوباره به مرورگر ارسال نمی‌شود. فایل محلی ‎.env را به اشتراک نگذارید.</p><div class="divider"></div><datalist id="model-options"></datalist><label for="normal-model">تحلیل عادی <span>NORMAL</span></label><input id="normal-model" name="model_normal" dir="ltr" list="model-options" placeholder="oc/nemotron-3.5-lightning-free" required><div class="form-grid"><div><label for="watch-model">پایش ستاپ <span>WATCH</span></label><input id="watch-model" name="model_watch" dir="ltr" list="model-options" required></div><div><label for="critical-model">تصمیم حساس <span>CRITICAL</span></label><input id="critical-model" name="model_critical" dir="ltr" list="model-options" required></div></div><div class="actions"><button type="submit" class="primary" id="save-settings">ذخیره تنظیمات</button><button type="button" id="load-models">دریافت لیست مدل‌ها</button></div><p class="hint">مدل دقیقاً با شناسه واردشده استفاده می‌شود؛ مدل دیگری خودکار جایگزین نمی‌شود.</p></form></article>
-<div class="stack"><article class="card"><h2>تست اتصال AI</h2><p>یک درخواست کوتاه با فرم فعلی؛ بدون سفارش یا معامله. ممکن است هزینه API داشته باشد.</p><label for="test-level">مدل مورد آزمایش</label><select id="test-level"><option value="model_normal">NORMAL</option><option value="model_watch">WATCH</option><option value="model_critical">CRITICAL</option></select><button id="test-ai" class="wide">ارسال درخواست آزمایشی</button><pre id="ai-result" dir="ltr" aria-live="polite">No test yet.</pre></article><article class="card"><h2>اجرای تریدر</h2><label for="run-mode">محیط اجرا</label><select id="run-mode"><option value="simulation">شبیه‌سازی — داده مصنوعی</option><option value="mt5">MetaTrader 5 — فقط حساب دمو</option></select><div id="mt5-status" class="hint" role="status">برای بررسی آمادگی MT5، گزینهٔ MetaTrader 5 را انتخاب کنید.</div><div class="actions"><button id="start-agent" class="primary">شروع تریدر</button><button id="stop-agent" class="danger" disabled>توقف</button></div><p class="hint">برای اعمال تنظیمات جدید، پردازش را متوقف و دوباره شروع کنید. توقف پردازش لزوماً پوزیشن دمو را نمی‌بندد.</p></article></div></div></section>
-<section id="monitor" class="tab" hidden><article class="card"><h2>پوزیشن‌های باز</h2><div id="positions" class="data-view"></div></article><div class="columns"><article class="card"><h2>آخرین تحلیل‌ها</h2><div id="theses" class="data-view"></div></article><article class="card"><h2>معاملات اخیر</h2><div id="trades" class="data-view"></div></article></div><article class="card"><h2>عملکرد ثبت‌شده</h2><pre id="performance" dir="ltr">No data.</pre></article></section>
-<section id="debug" class="tab" hidden><article class="card"><div class="card-heading"><div><h2>خروجی زندهٔ پردازش</h2><p>فقط پردازشی که از همین پنل اجرا شده است. لاگ در حافظه نگه داشته می‌شود و با ری‌استارت پاک می‌شود.</p></div><div class="log-tools"><span id="log-state" class="badge">—</span><select id="log-filter" aria-label="فیلتر لاگ"><option value="all">همهٔ سطوح</option><option value="ERROR">فقط خطاها</option><option value="WARN">هشدار و خطا</option><option value="INFO">اطلاعات و بالاتر</option></select><button id="log-copy">کپی لاگ</button><button id="log-clear">پاک کردن نما</button></div></div><pre id="process-logs" class="terminal" dir="ltr">No process logs yet.</pre></article><article class="card"><h2>خلاصهٔ عیب‌یابی</h2><p>پرتکرارترین خطاها بدون نیاز به خواندن لاگ.</p><div id="diagnostics" class="data-view"></div></article><article class="card"><h2>درخواست‌های AI</h2><div id="ai-requests" class="data-view"></div></article><article class="card"><h2>تصمیم‌ها و خطاهای اعتبارسنجی</h2><div id="decisions" class="data-view"></div></article><article class="card"><h2>رویدادهای سیستم</h2><div id="events" class="data-view"></div></article></section>
-<footer><span>LOCAL FIRST · NO CLOUD UI · NO LIVE TRADING</span><span id="last-update">—</span></footer></main></body></html>
+  <aside>
+    <div class="brand" dir="ltr">
+      <span class="brand-mark">AI</span>
+      <span>ai-trader<small>PRO CONSOLE</small></span>
+    </div>
+    <nav aria-label="بخش‌ها">
+      <button class="nav active" data-tab="monitor">داشبورد و رشد سرمایه <span>01</span></button>
+      <button class="nav" data-tab="settings">تنظیمات سیستم و AI <span>02</span></button>
+      <button class="nav" data-tab="backtest">بک‌تست و خودآموزی <span>03</span></button>
+      <button class="nav" data-tab="debug">کنسول و لاگ زنده <span>04</span></button>
+    </nav>
+    <div class="sidebar-note">
+      <span class="badge status-badge" id="mt5-badge">MT5 DEMO</span>
+      <span class="badge" id="mt5-status">MT5: بررسی نشده</span>
+      <p id="sidebar-account-desc">اتصال زنده به متاتریدر ۵ دمو.<br>مجهز به Gemini Decision 1.</p>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div>
+        <span class="eyebrow" id="header-eyebrow">METATRADER 5 / LIVE DEMO</span>
+        <h1 id="page-title">داشبورد معاملات و رشد سرمایه</h1>
+      </div>
+      <div class="header-actions">
+        <span id="memory-label" class="badge">RAM: —</span>
+        <span id="connection" class="badge">در حال اتصال…</span>
+        <button id="start-agent" class="btn-action primary">شروع تریدر</button>
+        <button id="stop-agent" class="btn-action danger" disabled>توقف</button>
+        <button id="refresh" aria-label="تازه‌سازی">تازه‌سازی</button>
+      </div>
+    </header>
+
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <div id="ai-alert" class="alert" role="alert" hidden></div>
+    <div id="db-alert" class="alert danger" role="alert" hidden></div>
+
+    <!-- Top Metrics Banner -->
+    <section class="metrics" aria-label="وضعیت سیستم">
+      <article>
+        <span>وضعیت تریدر</span>
+        <strong id="process-state">—</strong>
+        <small id="process-detail">آماده پایش مارکت</small>
+      </article>
+      <article>
+        <span>بالانس متاتریدر ۵</span>
+        <strong id="live-balance">—</strong>
+        <small id="live-equity">Equity: —</small>
+      </article>
+      <article>
+        <span>سود و زیان امروز</span>
+        <strong id="today-pnl">—</strong>
+        <small id="today-pnl-pct">۰.۰٪ روزانه</small>
+      </article>
+      <article>
+        <span>کل سود و بازدهی (PnL)</span>
+        <strong id="total-pnl">—</strong>
+        <small id="total-pnl-pct">+۰.۰٪ بازدهی کل</small>
+      </article>
+      <article>
+        <span>پوزیشن‌های باز</span>
+        <strong id="open-pos">۰ معامله</strong>
+        <small id="winrate-badge">وین‌ریت: —</small>
+      </article>
+    </section>
+
+    <!-- TAB 1: MONITOR & EQUITY CURVE -->
+    <section id="monitor" class="tab">
+      <!-- Crypto vs TradFi Asset Breakdown Strip -->
+      <div class="asset-grid">
+        <!-- Crypto Performance Card -->
+        <article class="card asset-card crypto-card">
+          <div class="asset-header">
+            <div class="asset-title">
+              <span class="asset-badge-icon crypto-icon">₿</span>
+              <div>
+                <div class="asset-name">معاملات رمز ارزها (Crypto)</div>
+                <div class="asset-desc">بیت‌کوین (BTCUSD)، اتریوم (ETHUSD) و سولانا · بازار ۲۴/۷</div>
+              </div>
+            </div>
+            <span class="badge asset-tag crypto-tag">۲۴ ساعته فعال</span>
+          </div>
+          <div class="asset-metric-row">
+            <div class="asset-metric">
+              <span>سود / زیان خالص</span>
+              <strong id="crypto-pnl" class="neutral">0.00 $</strong>
+              <small id="crypto-pct" class="pct-pill neutral">0.0% بازدهی</small>
+            </div>
+            <div class="asset-metric">
+              <span>تعداد ترید</span>
+              <strong id="crypto-count">0</strong>
+              <small id="crypto-wl">0 برد / 0 باخت</small>
+            </div>
+            <div class="asset-metric">
+              <span>نرخ برد</span>
+              <strong id="crypto-winrate">—</strong>
+              <small id="crypto-pf">ضریب سود: —</small>
+            </div>
+          </div>
+        </article>
+
+        <!-- Forex & TradFi Performance Card -->
+        <article class="card asset-card tradfi-card">
+          <div class="asset-header">
+            <div class="asset-title">
+              <span class="asset-badge-icon tradfi-icon">🌐</span>
+              <div>
+                <div class="asset-name">فارکس، فلزات و کالاها (TradFi)</div>
+                <div class="asset-desc">EURUSD، انس طلا (XAUUSD)، نفت و داوجونز</div>
+              </div>
+            </div>
+            <span class="badge asset-tag tradfi-tag">FOREX / COMMODITY</span>
+          </div>
+          <div class="asset-metric-row">
+            <div class="asset-metric">
+              <span>سود / زیان خالص</span>
+              <strong id="tradfi-pnl" class="good">+4.73 $</strong>
+              <small id="tradfi-pct" class="pct-pill good">+15.8% بازدهی</small>
+            </div>
+            <div class="asset-metric">
+              <span>تعداد ترید</span>
+              <strong id="tradfi-count">8</strong>
+              <small id="tradfi-wl">5 برد / 3 باخت</small>
+            </div>
+            <div class="asset-metric">
+              <span>نرخ برد</span>
+              <strong id="tradfi-winrate">62.5%</strong>
+              <small id="tradfi-pf">ضریب سود: 4.01</small>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <!-- Equity Curve Card -->
+      <article class="card chart-card">
+        <div class="card-heading">
+          <div>
+            <h2>منحنی رشد سرمایه (Equity Curve)</h2>
+            <p>نمودار تجمعی رشد سود و زیان دلاری بر اساس معاملات بسته‌شده</p>
+          </div>
+          <div class="chart-stats">
+            <span class="stat-pill"><small>وین‌ریت کل:</small> <strong id="kpi-winrate">—</strong></span>
+            <span class="stat-pill"><small>فاکتور سود:</small> <strong id="kpi-pf">—</strong></span>
+            <span class="stat-pill"><small>حداکثر افت (DD):</small> <strong id="kpi-dd">—</strong></span>
+          </div>
+        </div>
+        <div class="chart-container">
+          <svg id="equity-svg" viewBox="0 0 800 240" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="equity-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.3"/>
+                <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
+              </linearGradient>
+            </defs>
+            <path id="equity-area" fill="url(#equity-grad)" d="M0,200 L800,200 Z" />
+            <path id="equity-line" fill="none" stroke="#10b981" stroke-width="2.5" d="M0,200 L800,200" />
+            <g id="chart-zero-line"></g>
+            <g id="chart-labels"></g>
+          </svg>
+          <div id="chart-empty-msg" class="empty">هنوز معامله بسته‌شده‌ای برای ترسیم نمودار ثبت نشده است.</div>
+        </div>
+      </article>
+
+      <div class="columns">
+        <article class="card">
+          <div class="card-heading">
+            <h2>پوزیشن‌های باز لحظه‌ای</h2>
+            <span id="pos-count-badge" class="badge">0 باز</span>
+          </div>
+          <div id="positions" class="data-view"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-heading">
+            <div>
+              <h2>معاملات اخیر</h2>
+              <span id="winrate-badge" class="badge" style="display:none;">وین‌ریت: —</span>
+            </div>
+            <div class="trade-filter-tabs">
+              <button type="button" class="trade-tab-btn active" id="filter-all-btn" data-filter="all">همه (<span id="count-all">0</span>)</button>
+              <button type="button" class="trade-tab-btn" id="filter-crypto-btn" data-filter="crypto">کریپتو ₿ (<span id="count-crypto">0</span>)</button>
+              <button type="button" class="trade-tab-btn" id="filter-tradfi-btn" data-filter="tradfi">فارکس و طلا (<span id="count-tradfi">0</span>)</button>
+            </div>
+          </div>
+          <div id="trades" class="data-view"></div>
+        </article>
+      </div>
+
+      <article class="card">
+        <h2>تحلیل لحظه‌ای و سوگیری جفت‌ارزها (Market Regimes & Theses)</h2>
+        <div id="theses" class="theses-grid"></div>
+      </article>
+
+      <!-- Non-Entry Analysis & Transparency Box -->
+      <article class="card" id="non-entry-card">
+        <div class="card-heading">
+          <div>
+            <h2>شفافیت عدم ورود و فیلترهای محافظتی (Non-Entry & Rejections Analysis)</h2>
+            <p>توضیحات زنده و شفاف چرا ربات در هر نماد فعلاً دست نگه داشته یا چه ستاپ‌هایی وتو شده‌اند</p>
+          </div>
+          <span class="badge" id="rejections-count-badge">۰ وتو</span>
+        </div>
+        <div id="rejections-banner" class="alert warning" hidden></div>
+        <div class="filter-grid" id="filter-reasons-grid"></div>
+      </article>
+    </section>
+
+    <!-- TAB 2: SETTINGS & STRATEGY -->
+    <section id="settings" class="tab" hidden>
+      <div class="columns">
+        <!-- Strategy & Risk Config -->
+        <article class="card">
+          <div class="card-heading">
+            <div>
+              <h2>استراتژی کوانت و مدیریت ریسک</h2>
+              <p>فیلترهای معاملاتی، سشن‌ها، و کنترل حساب کوچک</p>
+            </div>
+            <span class="badge">Real Demo</span>
+          </div>
+
+          <form id="strategy-settings" autocomplete="off">
+            <div class="form-group">
+              <label for="cfg-engine">موتور تحلیل و معامله</label>
+              <select id="cfg-engine" name="engine">
+                <option value="quant">کوانت محض (ریاضیاتی ۱۰۰٪ — بدون نیاز به AI)</option>
+                <option value="hybrid">هیبرید هوشمند (کوانت + تاییدیه Gemini Decision 1)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-tf-mode">سبک و تایم‌فریم معاملاتی (Trading Style)</label>
+              <select id="cfg-tf-mode" name="timeframe_mode">
+                <option value="scalp_m5">اسکلپ سریع M5 (روند M15 + ورود M5 — حد ضرر کوچک، معاملات بیشتر)</option>
+                <option value="standard_m15">معاملات اینترادی M15 (روند H1 + ورود M15 — ستاپ‌های کلاسیک)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-exec-type">نحوه ورود به معامله</label>
+              <select id="cfg-exec-type" name="execution_type">
+                <option value="market">ورود آنی در مارکت (Market Order)</option>
+                <option value="limit">سفارش Limit پولبک (کاهش اسپرد و اسلیپیج)</option>
+              </select>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <strong>پایش مستقیم Market Watch متاتریدر</strong>
+                <p>خوانش خودکار جفت‌ارزهای فعال در پنجره Market Watch متاتریدر ۵</p>
+              </div>
+              <input type="checkbox" id="cfg-use-mw" name="use_market_watch" checked>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <strong>فیلتر تاییدیه حجم (Volume Filter)</strong>
+                <p>ورود فقط در کندل‌های با حجم بالاتر از میانگین ۲۰ کندل گذشته</p>
+              </div>
+              <input type="checkbox" id="cfg-vol-filter" name="volume_filter" checked>
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <strong>فیلتر سشن‌های لندن و نیویورک</strong>
+                <p>محدود کردن معاملات به ساعات پرنقدینگی و قفل معاملات در رول‌اور</p>
+              </div>
+              <input type="checkbox" id="cfg-session-filter" name="session_filter">
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <strong>فیلتر عمق دفتر سفارشات (Order Book Imbalance)</strong>
+                <p>تاییدیه غلبه سفارشات خریداران در صف بر فروشندگان</p>
+              </div>
+              <input type="checkbox" id="cfg-order-book" name="check_order_book" checked>
+            </div>
+
+            <div class="actions">
+              <button type="button" class="primary" id="save-strategy-btn">ذخیره تنظیمات استراتژی</button>
+            </div>
+          </form>
+        </article>
+
+        <!-- Decision AI Config -->
+        <div class="stack">
+          <article class="card">
+            <div class="card-heading">
+              <div>
+                <h2>هوش مصنوعی تصمیم‌گیر (Decision AI)</h2>
+                <p>Google Gemini Decision 1 · Zero Output Tokens</p>
+              </div>
+              <span id="decision-ai-badge" class="badge">فعال</span>
+            </div>
+
+            <form id="ai-settings" autocomplete="off">
+              <input type="hidden" name="base_url" value="https://generativelanguage.googleapis.com">
+              <input type="hidden" name="model_normal" value="gemini-decision-1">
+              <input type="hidden" name="model_watch" value="gemini-decision-1">
+              <input type="hidden" name="model_critical" value="gemini-decision-1">
+              <div class="toggle-row">
+                <div>
+                  <strong>فعال‌سازی هوش مصنوعی تصمیم‌گیر</strong>
+                  <p>اگر غیرفعال باشد، ربات ۱۰۰٪ با منطق کوانت بدون خطا کار می‌کند</p>
+                </div>
+                <input type="checkbox" id="cfg-ai-enabled" name="decision_ai_enabled" checked>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-ai-model">مدل هوش مصنوعی</label>
+                <select id="cfg-ai-model" name="decision_ai_model">
+                  <option value="gemini-decision-1">Google DeepMind Gemini Decision 1 (توصیه‌شده)</option>
+                  <option value="gemini-flash-lite-latest">Google Gemini Flash Lite (نسخه جایگزین)</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-ai-confidence">حداقل احتمال تایید برای ورود (Confidence %)</label>
+                <input type="number" id="cfg-ai-confidence" name="decision_ai_confidence" min="50" max="95" value="60">
+              </div>
+
+              <div class="form-group">
+                <label for="cfg-api-key">کلید دسترسی گوگل (AI Studio Key)</label>
+                <input id="cfg-api-key" name="api_key" dir="ltr" type="password" placeholder="AQ.Ab8RN... (خالی بگذارید تا کلید فعلی بماند)">
+              </div>
+
+              <div class="actions">
+                <button type="button" class="primary" id="save-ai-btn">ذخیره تنظیمات AI</button>
+                <button type="button" id="test-ai">تست اتصال Decision AI</button>
+              </div>
+              <pre id="ai-test-result" dir="ltr">آماده تست اتصال.</pre>
+            </form>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: BACKTEST & SELF-TRAIN -->
+    <section id="backtest" class="tab" hidden>
+      <div class="columns">
+        <article class="card">
+          <div class="card-heading">
+            <div>
+              <h2>شبیه‌ساز تاریخی و خودآموزی آخر هفته</h2>
+              <p>بک‌تست گام‌به‌گام (Walk-Forward) بدون نگاه به آینده</p>
+            </div>
+            <span class="badge">Backtester</span>
+          </div>
+
+          <form id="backtest-form">
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="bt-symbol">نماد معاملاتی (از واچ‌لیست فعال)</label>
+                <select id="bt-symbol">
+                  <option value="EURUSD">EURUSD (یورو به دلار)</option>
+                  <option value="XAUUSD">XAUUSD (انس طلا)</option>
+                  <option value="UKBRENT.F27">UKBRENT.F27 (نفت خام برنت)</option>
+                  <option value="US30CASH">US30CASH (شاخص داوجونز)</option>
+                  <option value="GBPUSD">GBPUSD (پوند به دلار)</option>
+                  <option value="USDJPY">USDJPY (دلار به ین)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="bt-count">تعداد کندل‌های M15</label>
+                <select id="bt-count">
+                  <option value="500">۵۰۰ کندل (~۵ روز کاری)</option>
+                  <option value="1000">۱,۰۰۰ کندل (~۱۰ روز کاری)</option>
+                  <option value="2000" selected>۲,۰۰۰ کندل (~۲۰ روز کاری)</option>
+                  <option value="3000">۳,۰۰۰ کندل (~۱ ماه کاری)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="bt-balance">بالانس اولیه فرضی ($)</label>
+              <input type="number" id="bt-balance" value="30.0" min="10" step="5">
+            </div>
+
+            <div class="actions">
+              <button type="button" class="primary" id="run-backtest-btn">اجرای بک‌تست تاریخی</button>
+              <button type="button" class="accent-btn" id="run-train-btn">شروع یادگیری و بهینه‌سازی پارامترها</button>
+            </div>
+            <p class="hint">در روزهای تعطیل (شنبه و یکشنبه)، دکمه «شروع یادگیری» پارامترها را بهینه‌سازی کرده و درس‌های آموخته‌شده را در حافظه ربات ذخیره می‌کند.</p>
+          </form>
+        </article>
+
+        <!-- Backtest Results Card -->
+        <article class="card">
+          <div class="card-heading">
+            <div>
+              <h2>نتایج و بازدهی بک‌تست</h2>
+              <p id="bt-summary-title">هنوز بک‌تستی اجرا نشده است.</p>
+            </div>
+            <span id="bt-pf-badge" class="badge">—</span>
+          </div>
+
+          <div class="metrics mini-metrics">
+            <article><span>بالانس نهایی</span><strong id="bt-final-bal">—</strong></article>
+            <article><span>سود خالص</span><strong id="bt-net-pnl">—</strong></article>
+            <article><span>وین‌ریت</span><strong id="bt-winrate">—</strong></article>
+            <article><span>کل تریدها</span><strong id="bt-trades-count">—</strong></article>
+          </div>
+
+          <div class="chart-container" style="height: 180px; margin-top: 15px;">
+            <svg id="bt-equity-svg" viewBox="0 0 600 180" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="bt-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
+                  <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0"/>
+                </linearGradient>
+              </defs>
+              <path id="bt-area" fill="url(#bt-grad)" d="M0,150 L600,150 Z" />
+              <path id="bt-line" fill="none" stroke="#3b82f6" stroke-width="2" d="M0,150 L600,150" />
+            </svg>
+          </div>
+
+          <!-- Lessons Learned Box -->
+          <div id="bt-lessons-box" style="margin-top: 15px;" hidden>
+            <h3>درس‌های آموخته‌شده هوش مصنوعی (Self-Trained Lessons):</h3>
+            <ul id="bt-lessons-list" class="lessons-list"></ul>
+          </div>
+
+          <!-- Backtest Detailed Trades List -->
+          <div id="bt-trades-card" style="margin-top: 15px;" hidden>
+            <div class="card-heading">
+              <h3>ریز معاملات انجام‌شده در بک‌تست (Trade Log)</h3>
+              <span id="bt-trades-badge" class="badge">۰ معامله</span>
+            </div>
+            <div id="bt-trades-view" class="data-view" style="max-height: 280px; overflow-y: auto;"></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- TAB 4: DEBUG & LOGS -->
+    <section id="debug" class="tab" hidden>
+      <article class="card">
+        <div class="card-heading">
+          <div>
+            <h2>خروجی زنده و عملکرد لحظه‌ای</h2>
+            <p>لاگ‌های فرآیند تریدر در حافظه محلی</p>
+          </div>
+          <div class="log-tools">
+            <span id="log-state" class="badge">فعال</span>
+            <select id="log-filter" aria-label="فیلتر">
+              <option value="all">همه لاگ‌ها</option>
+              <option value="INFO">اطلاعات (INFO)</option>
+              <option value="WARN">هشدارها (WARN)</option>
+              <option value="ERROR">فقط خطاها (ERROR)</option>
+            </select>
+            <button id="log-copy">کپی لاگ</button>
+            <button id="log-clear">پاک کردن نما</button>
+          </div>
+        </div>
+        <pre id="process-logs" class="terminal" dir="ltr">در حال دریافت لاگ‌ها…</pre>
+      </article>
+
+      <div class="columns">
+        <article class="card">
+          <h2>درخواست‌ها و ارزیابی‌های Decision AI</h2>
+          <div id="ai-requests" class="data-view"></div>
+        </article>
+        <article class="card">
+          <h2>تصمیمات و اعتبارسنجی‌ها</h2>
+          <div id="decisions" class="data-view"></div>
+        </article>
+      </div>
+
+      <article class="card" style="margin-top: 15px;">
+        <h2>تشخیص و سلامت سیستم (Diagnostics)</h2>
+        <div id="diagnostics" class="data-view"></div>
+      </article>
+    </section>
+
+    <footer>
+      <span>AI TRADER PRO · NATIVE METATRADER 5 & GEMINI DECISION 1 · NO SIMULATION</span>
+      <span id="last-update">—</span>
+    </footer>
+  </main>
+</body>
+</html>

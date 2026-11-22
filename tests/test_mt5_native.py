@@ -8,14 +8,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 class TestMT5NativeWiring:
     def test_mt5_mode_refused_without_terminal(self):
-        """On Linux/without MT5 package, build_mt5_stack must fail cleanly."""
+        """When MT5 is unavailable, build_mt5_stack must fail cleanly."""
+        from unittest.mock import patch
         from app.execution.mt5_native import build_mt5_stack
         from app.database.repository import Repository
         fd, path = tempfile.mkstemp(suffix=".db")
         os.close(fd)
         repo = Repository(db_path=path)
         try:
-            build_mt5_stack(repo)
+            with patch.dict("sys.modules", {"MetaTrader5": None}):
+                build_mt5_stack(repo)
             raised = False
         except RuntimeError as exc:
             raised = True

@@ -100,3 +100,35 @@ def swing_levels(candles, lookback: int = 100):
     res_above = sorted([x for x in res if x > last])
     sup_below = sorted([x for x in sup if x < last], reverse=True)
     return {"resistance": res_above[:3], "support": sup_below[:3]}
+
+
+def std_dev(values, period: int = 20):
+    if len(values) < period:
+        return None
+    window = values[-period:]
+    mean = sum(window) / period
+    variance = sum((x - mean) ** 2 for x in window) / period
+    return math.sqrt(variance)
+
+
+def bollinger_bands(values, period: int = 20, num_std: float = 2.0):
+    if len(values) < period:
+        return None, None, None
+    mid = sma(values, period)
+    sd = std_dev(values, period)
+    if mid is None or sd is None:
+        return None, None, None
+    upper = mid + num_std * sd
+    lower = mid - num_std * sd
+    return upper, mid, lower
+
+
+def z_score(values, period: int = 20):
+    if len(values) < period:
+        return None
+    mean = sma(values, period)
+    sd = std_dev(values, period)
+    if mean is None or sd is None or sd == 0:
+        return 0.0
+    return (values[-1] - mean) / sd
+

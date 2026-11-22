@@ -7,3 +7,6 @@ risk:
   max_spread_multiplier: 3.0    # reject if spread > 3x normal
   max_drawdown: 0.10
   max_consecutive_losses: 4
+  allow_micro_lot_small_account: true   # enables 0.01 micro-lot for balances < $200
+  max_small_account_risk_pct: 0.08      # max 8% dollar loss cap on small balances
+

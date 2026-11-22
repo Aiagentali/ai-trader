@@ -54,7 +54,7 @@ def _project(tmp_path):
     import shutil
     project = str(tmp_path / "proj")
     shutil.copytree(ROOT, project, symlinks=True,
-                    ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__"))
+                    ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "data"))
     os.makedirs(os.path.join(project, "data"), exist_ok=True)
     return project
 

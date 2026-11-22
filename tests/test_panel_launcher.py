@@ -1,3 +1,4 @@
+import os
 import json
 import subprocess
 import sys
@@ -5,7 +6,7 @@ import time
 import urllib.error
 import urllib.request
 
-ROOT = "/data/workspace/ai-trader"
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def test_panel_launcher_serves_loopback_only():

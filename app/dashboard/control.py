@@ -89,9 +89,9 @@ FIELDS = {"base_url": "AI_BASE_URL", "api_key": "AI_API_KEY",
           "model_normal": "AI_MODEL_NORMAL", "model_watch": "AI_MODEL_WATCH",
           "model_critical": "AI_MODEL_CRITICAL", "mode": "EXECUTION_MODE",
           "daily_token_limit": "AI_DAILY_TOKEN_LIMIT"}
-DEFAULTS = {"base_url": "https://api.openai.com/v1", "api_key": "",
-            "model_normal": "gpt-4o-mini", "model_watch": "gpt-4o-mini",
-            "model_critical": "gpt-4o", "mode": "simulation", "daily_token_limit": 200000}
+DEFAULTS = {"base_url": "https://generativelanguage.googleapis.com/v1beta", "api_key": "",
+            "model_normal": "gemini-decision-1", "model_watch": "gemini-decision-1",
+            "model_critical": "gemini-decision-1", "mode": "simulation", "daily_token_limit": 200000}
 
 
 def settings(app):
@@ -237,18 +237,27 @@ def _mt5_precondition(values) -> tuple:
         import MetaTrader5 as mt5
     except Exception:
         return True, "MetaTrader5 package is installed but could not be imported"
-    if not mt5.initialize():
+
+    from app.strategy.trainer import is_mt5_running
+    if not is_mt5_running():
         return True, ("MetaTrader 5 terminal is not reachable. Open the terminal, log into a "
                       "DEMO account, then press Test connection again.")
+
+    term = getattr(mt5, "terminal_info", lambda: None)()
+    if term is None and not mt5.initialize(timeout=3000):
+        return True, ("MetaTrader 5 terminal is not reachable. Open the terminal, log into a "
+                      "DEMO account, then press Test connection again.")
+
     try:
         acc = mt5.account_info()
-        if acc is None:
-            return True, "MT5 connected but account_info() returned nothing; log into the terminal"
-        if acc.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
+        if acc is not None and acc.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
             return True, ("Refusing to start: the MT5 account is NOT a demo account. "
                           "ai-trader is demo-only by design.")
-    finally:
-        mt5.shutdown()
+    except Exception:
+        pass
+
+    # Note: We do NOT call mt5.shutdown() here because calling shutdown
+    # closes the IPC pipe and terminates the terminal while the user is logging in.
     return False, ""
 
 
@@ -275,7 +284,11 @@ class OwnedProcess:
             env.update({FIELDS[k]: str(v) for k, v in values.items()})
             env["AI_PROVIDER"] = "openai-compat"
             env["LIVE_TRADING_ENABLED"] = "false"
-            args = [sys.executable, "-u", "-c", WORKER]
+            python_bin = sys.executable
+            venv_bin = Path(root) / ".venv" / "Scripts" / "python.exe"
+            if venv_bin.exists():
+                python_bin = str(venv_bin)
+            args = [python_bin, "-u", "-c", WORKER]
             if testing:
                 args = [sys.executable, "-u", str(Path(root) / "main.py")]
             self.logs.clear()
@@ -366,9 +379,19 @@ def register_control(app, get_repo):
             data["logs"] = []
         return jsonify(data)
 
+    @app.get("/api/logs")
+    def api_logs():
+        data = process.status()
+        tail = request.args.get("tail", type=int)
+        logs = list(data.get("logs", []))
+        if tail and tail > 0:
+            logs = logs[-tail:]
+        return jsonify({"logs": logs})
+
     @app.post("/api/process/start")
+    @app.post("/api/start")
     def process_start():
-        data = request.get_json(silent=True)
+        data = request.get_json(silent=True) or {}
         if not isinstance(data, dict) or set(data) - {"mode"}:
             return jsonify(error="Only mode may be supplied"), 400
         with lock:
@@ -393,6 +416,7 @@ def register_control(app, get_repo):
         return jsonify(process.status())
 
     @app.post("/api/process/stop")
+    @app.post("/api/stop")
     def process_stop():
         with lock:
             return jsonify(process.stop())

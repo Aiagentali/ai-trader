@@ -4,12 +4,37 @@ from dataclasses import dataclass, field
 
 CONTRACT_SIZE = 100_000  # standard lot
 
+
+def contract_size(symbol: str) -> float:
+    s = symbol.upper()
+    if "XAU" in s or "GOLD" in s:
+        return 100.0
+    if any(c in s for c in ("BTC", "ETH", "SOL", "BNB", "LTC", "XRP")):
+        return 1.0
+    if "BRENT" in s or "OIL" in s or "WTI" in s:
+        return 100.0
+    if "US30" in s or "WS30" in s or s.startswith("DJ") or "DOW" in s:
+        return 1.0
+    return CONTRACT_SIZE
+
+
 # Rough currency-pair correlation groups (shared legs)
 CURRENCY_LEG = {
     "EURUSD": ("EUR", "USD"), "GBPUSD": ("GBP", "USD"), "USDJPY": ("USD", "JPY"),
     "USDCHF": ("USD", "CHF"), "AUDUSD": ("AUD", "USD"), "USDCAD": ("USD", "CAD"),
     "NZDUSD": ("NZD", "USD"), "EURJPY": ("EUR", "JPY"), "GBPJPY": ("GBP", "JPY"),
 }
+
+
+def _get_currency_leg(symbol: str) -> set:
+    if symbol in CURRENCY_LEG:
+        return set(CURRENCY_LEG[symbol])
+    clean = symbol.split(".")[0]
+    if clean in CURRENCY_LEG:
+        return set(CURRENCY_LEG[clean])
+    if len(clean) == 6 and clean.isalpha():
+        return {clean[:3], clean[3:6]}
+    return {symbol}
 
 
 @dataclass
@@ -22,19 +47,42 @@ class RiskResult:
 
 
 def pip_size(symbol: str) -> float:
-    return 0.01 if symbol.endswith("JPY") else 0.0001
+    s = symbol.upper()
+    if "XAU" in s or "GOLD" in s:
+        return 0.1
+    if "BTC" in s:
+        return 1.0
+    if "ETH" in s:
+        return 0.1
+    if "SOL" in s:
+        return 0.01
+    if "BRENT" in s or "OIL" in s or "WTI" in s:
+        return 0.01
+    if "US30" in s or "WS30" in s or s.startswith("DJ") or "DOW" in s:
+        return 1.0
+    if s.endswith("JPY") or "JPY" in s:
+        return 0.01
+    return 0.0001
 
 
 def calc_position_size(balance: float, risk_pct: float, entry: float,
-                       stop_loss: float, symbol: str) -> float:
-    """Lots = risk_amount / (SL distance in price * contract size)."""
+                       stop_loss: float, symbol: str,
+                       allow_micro: bool = False, max_micro_risk_pct: float = 0.08) -> float:
+    """Lots = risk_amount / (SL distance in price * contract size).
+    Supports small accounts by allowing 0.01 micro-lot if dollar loss is bounded.
+    """
     risk_amount = balance * risk_pct
     dist = abs(entry - stop_loss)
     if dist <= 0:
         return 0.0
-    per_lot_loss = dist * CONTRACT_SIZE
+    per_lot_loss = dist * contract_size(symbol)
     lots = risk_amount / per_lot_loss
-    return math.floor(lots * 100) / 100  # 2-decimal floor
+    floored = math.floor(lots * 100) / 100  # 2-decimal floor
+    if floored < 0.01 and allow_micro and balance >= 10.0:
+        micro_loss = 0.01 * per_lot_loss
+        if micro_loss <= balance * max_micro_risk_pct:
+            return 0.01
+    return floored
 
 
 def calc_rr(direction: str, entry: float, sl: float, tps: list) -> float:
@@ -48,13 +96,13 @@ def calc_rr(direction: str, entry: float, sl: float, tps: list) -> float:
 
 
 def _correlated_count(symbol: str, open_symbols: list) -> int:
-    leg = set(CURRENCY_LEG.get(symbol, ()))
+    leg = _get_currency_leg(symbol)
     count = 0
     for s in open_symbols:
         if s == symbol:
             count += 1
             continue
-        if set(CURRENCY_LEG.get(s, ())) & leg:
+        if _get_currency_leg(s) & leg:
             count += 1
     return count
 
@@ -135,12 +183,15 @@ class RiskEngine:
         requested_risk = decision.get("position_size", {}).get("risk_percent")
         risk_pct = min(requested_risk, cfg["max_risk_per_trade"]) if requested_risk \
             else cfg["max_risk_per_trade"]
-        lots = calc_position_size(balance, risk_pct, entry, sl, symbol)
+        allow_micro = cfg.get("allow_micro_lot_small_account", False) and balance < 500
+        max_micro_risk = cfg.get("max_small_account_risk_pct", 0.08)
+        lots = calc_position_size(balance, risk_pct, entry, sl, symbol,
+                                  allow_micro=allow_micro, max_micro_risk_pct=max_micro_risk)
         if lots <= 0:
             res.reasons_reject.append("position size rounds to zero")
             return res
         res.calculated_lots = lots
-        res.risk_percent = round(risk_pct * 100, 3)
+        res.risk_percent = round((lots * abs(entry - sl) * contract_size(symbol) / balance) * 100, 3) if balance > 0 else 0.0
 
         # --- RR ---
         rr = calc_rr(d, entry, sl, tps)
@@ -167,7 +218,8 @@ class RiskEngine:
 
         # --- consecutive losses ---
         cons = self._consecutive_losses()
-        if cons >= cfg["max_consecutive_losses"]:
+        max_cons = cfg.get("max_consecutive_losses", 4)
+        if cons >= max_cons:
             res.reasons_reject.append(f"{cons} consecutive losses — trading halted for today")
 
         # --- spread ---

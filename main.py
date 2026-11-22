@@ -37,6 +37,7 @@ def main():
     mode = settings.get("execution", {}).get("mode", "simulation")
     repo = Repository()
 
+    feed = None
     if mode == "mt5":
         # MT5-native: real demo orders inside the MetaTrader 5 terminal
         from app.execution.mt5_native import build_mt5_stack
@@ -52,6 +53,14 @@ def main():
         log.info(f"db ready | mode={mode}")
         exec_engine = ExecutionEngine(repo, feed, mode,
                                       settings.get("trading", {}).get("live_trading_enabled", False))
+
+    if settings.get("trading", {}).get("use_market_watch", False) and hasattr(feed, "get_market_watch_symbols"):
+        mw_symbols = feed.get_market_watch_symbols()
+        if mw_symbols:
+            symbols = mw_symbols
+            log.info(f"Loaded {len(symbols)} symbols directly from Market Watch: {symbols}")
+        else:
+            log.warning("Market Watch returned 0 symbols; falling back to config symbols")
 
     ai_client = None
     budget = None
@@ -76,13 +85,15 @@ def main():
         log.warning(f"news collection failed: {exc}")
 
     risk_engine = RiskEngine(risk_cfg, repo, feed, calendar)
+    engine_type = settings.get("trading", {}).get("engine", "quant")
 
-    if ai_client and budget:
+    if engine_type == "quant" or (ai_client and budget):
+        log.info(f"starting agent in engine_mode={engine_type}")
         agent = Agent(feed, repo, ai_client, budget, risk_engine, exec_engine,
                       symbols, settings)
-        agent.run_forever(initial_interval_sec=30)
+        agent.run_forever(initial_interval_sec=15)
     else:
-        log.info("no AI — data collection mode only. Sleeping.")
+        log.info("no AI and engine is not quant — data collection mode only. Sleeping.")
         import time
         time.sleep(1)
 

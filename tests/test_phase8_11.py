@@ -36,13 +36,14 @@ class TestMT5DemoExecutor:
         os.unlink(path)
 
     def test_requires_mt5_package(self):
-        """On Linux (no MT5), connect() should return False gracefully."""
+        """When MT5 package is unavailable, connect() should return False gracefully."""
+        from unittest.mock import patch
         from app.execution.mt5_demo import MT5DemoExecutor
         repo, path = _tmp_repo()
-        exec_engine = MT5DemoExecutor(repo, _mock_feed(), live_trading_enabled=False)
-        # This server has no MetaTrader5 package
-        result = exec_engine.connect()
-        assert result is False
+        with patch.dict("sys.modules", {"MetaTrader5": None}):
+            exec_engine = MT5DemoExecutor(repo, _mock_feed(), live_trading_enabled=False)
+            result = exec_engine.connect()
+            assert result is False
         repo.close()
         os.unlink(path)
 

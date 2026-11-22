@@ -8,3 +8,5 @@ logs/
 .mypy_cache/
 venv/
 .venv/
+backups/
+*.corrupt.*

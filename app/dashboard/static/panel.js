@@ -1,8 +1,10 @@
 'use strict';
+
 function formatBytes(value) { return value == null ? '—' : `${Math.round(value / 1048576)} MiB`; }
 function toModelIds(data) { return [...new Set((Array.isArray(data.models) ? data.models : []).map(m => typeof m === 'string' ? m : m.id).filter(m => typeof m === 'string'))]; }
+
 const LOG_RANK = {DEBUG: 0, INFO: 1, WARN: 2, WARNING: 2, ERROR: 3, CRITICAL: 4};
-/** Keep only the log lines at or above the selected severity. Unknown lines pass through. */
+
 function filterLogs(lines, mode) {
   if (!Array.isArray(lines)) return [];
   if (!mode || mode === 'all') return lines.slice();
@@ -13,172 +15,806 @@ function filterLogs(lines, mode) {
     return m ? (LOG_RANK[m[1]] ?? 0) >= min : true;
   });
 }
-/** Summarise provider health straight from the diagnostics payload. */
-function summariseDiagnostics(d) {
-  if (!d || typeof d !== 'object') return [];
-  const out = [];
-  for (const m of Array.isArray(d.ai_by_model) ? d.ai_by_model : []) {
-    const failed = Number(m.failed || 0);
-    const calls = Number(m.calls || 0);
-    const pct = calls ? Math.round((failed / calls) * 100) : 0;
-    out.push({label: `مدل ${m.model}`, value: `${calls} فراخوانی · ${failed} خطا (${pct}٪)`, bad: failed > 0});
+
+function renderSvgCurve(svgId, areaId, lineId, points, initialBalance = 0) {
+  const svg = document.getElementById(svgId);
+  const area = document.getElementById(areaId);
+  const line = document.getElementById(lineId);
+  if (!svg || !line || !points || points.length < 2) return false;
+
+  const vals = points.map(p => typeof p === 'object' ? (p.balance ?? p.pnl ?? 0) : p);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = (max - min) || 1.0;
+
+  const W = 800, H = 220, padY = 20;
+  const stepX = W / (vals.length - 1);
+
+  const coords = vals.map((v, i) => {
+    const x = Math.round(i * stepX);
+    const y = Math.round(H - padY - ((v - min) / range) * (H - 2 * padY));
+    return [x, y];
+  });
+
+  const lineD = coords.reduce((acc, [x, y], i) => (i === 0 ? `M${x},${y}` : `${acc} L${x},${y}`), '');
+  line.setAttribute('d', lineD);
+
+  if (area) {
+    const lastX = coords[coords.length - 1][0];
+    const areaD = `${lineD} L${lastX},${H} L0,${H} Z`;
+    area.setAttribute('d', areaD);
   }
-  const statuses = d.ai_by_status && typeof d.ai_by_status === 'object' ? d.ai_by_status : {};
-  for (const [status, n] of Object.entries(statuses)) {
-    if (String(status).toLowerCase() !== 'ok') out.push({label: 'وضعیت درخواست‌ها', value: `${status}: ${n}`, bad: true});
-  }
-  const recovered = Array.isArray(d.recovered) ? d.recovered : [];
-  if (recovered.length) out.push({label: 'پاسخ‌های ناقص/بازیابی‌شده', value: String(recovered.length), bad: true});
-  for (const [status, n] of Object.entries(d.decisions_by_kind || {})) {
-    out.push({label: `تصمیم ${status}`, value: String(n), bad: /PARSE_ERROR|REJECTED/.test(String(status))});
-  }
-  return out;
+
+  // Set line color: green if final >= start, else red
+  const finalVal = vals[vals.length - 1];
+  const startVal = initialBalance > 0 ? initialBalance : vals[0];
+  const color = finalVal >= startVal ? '#10b981' : '#ef4444';
+  line.setAttribute('stroke', color);
+  return true;
 }
-if (typeof module !== 'undefined') module.exports = {formatBytes, toModelIds, filterLogs, summariseDiagnostics};
+
+function summariseDiagnostics(diag) {
+  if (!diag || typeof diag !== 'object') return [];
+  const rows = [];
+  (diag.ai_by_model || []).forEach(m => {
+    const failed = m.failed || 0;
+    const calls = m.calls || 0;
+    const pct = calls ? Math.round((failed / calls) * 100) : 0;
+    rows.push({
+      label: `مدل ${m.model}`,
+      value: `${calls} فراخوانی · ${failed} خطا (${pct}٪)`,
+      bad: failed > 0
+    });
+  });
+  if (diag.ai_by_status) {
+    const err = diag.ai_by_status.error || 0;
+    rows.push({
+      label: 'وضعیت درخواست‌ها',
+      value: `موفق: ${diag.ai_by_status.ok || 0} · خطا: ${err}`,
+      bad: err > 0
+    });
+  }
+  if (diag.recovered) {
+    rows.push({
+      label: 'پوزیشن‌های بازیابی‌شده',
+      value: `${diag.recovered.length} مورد`,
+      bad: false
+    });
+  }
+  if (diag.decisions_by_kind) {
+    for (const [kind, count] of Object.entries(diag.decisions_by_kind)) {
+      rows.push({
+        label: `تصمیم ${kind}`,
+        value: `${count} بار`,
+        bad: kind === 'PARSE_ERROR'
+      });
+    }
+  }
+  return rows;
+}
+
+if (typeof module !== 'undefined') module.exports = {formatBytes, toModelIds, filterLogs, renderSvgCurve, summariseDiagnostics};
+
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', () => {
   const $ = id => document.getElementById(id);
-  let csrf = '', refreshing = false, activeTab = 'settings';
-  const titles = {settings:'تنظیمات هوش مصنوعی', monitor:'وضعیت معاملات', debug:'دیباگ و لاگ'};
-  function notice(text, error = false) { $('notice').hidden = !text; $('notice').textContent = text; $('notice').className = error ? 'error' : ''; }
+  const setTxt = (id, val) => { const el = $(id); if (el && val !== undefined && val !== null) el.textContent = val; };
+  const setCls = (id, cls) => { const el = $(id); if (el && cls !== undefined && cls !== null) el.className = cls; };
+  let csrf = '', activeTab = 'monitor';
+  const titles = {
+    monitor: 'داشبورد معاملات و رشد سرمایه',
+    settings: 'تنظیمات سیستم و Decision AI',
+    backtest: 'بک‌تست تاریخی و خودآموزی',
+    debug: 'کنسول و لاگ زنده'
+  };
+
+  function notice(text, error = false) {
+    const n = $('notice');
+    if (!n) return;
+    n.hidden = !text;
+    n.textContent = text;
+    n.className = error ? 'error' : '';
+  }
+
   async function api(path, body) {
     const headers = {};
-    if (body !== undefined) { headers['Content-Type'] = 'application/json'; headers['X-CSRF-Token'] = csrf; }
-    const res = await fetch(path, {method:body === undefined ? 'GET' : 'POST', headers, body:body === undefined ? undefined : JSON.stringify(body), signal:AbortSignal.timeout(95000)});
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      if (csrf) headers['X-CSRF-Token'] = csrf;
+    }
+    const res = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(95000)
+    });
     let data;
-    try { data = await res.json(); } catch { throw new Error(`پاسخ نامعتبر سرور (HTTP ${res.status})`); }
+    try { data = await res.json(); } catch { throw new Error(`پاسخ سرور نامعتبر است (HTTP ${res.status})`); }
     if (!res.ok || data.ok === false) {
-      if (data.database_broken) {
-        const banner = $('db-alert');
-        banner.hidden = false;
-        banner.textContent = `دیتابیس آسیب دیده. در پوشهٔ پروژه این را اجرا کن: .venv\\Scripts\\python recover_db.py — بعد با --apply. جزئیات: ${data.error || ''}`;
-        throw new Error('دیتابیس خراب است؛ جزئیات در بالای صفحه.');
-      }
       throw new Error(data.error || data.message || `HTTP ${res.status}`);
     }
     return data;
   }
-  function formData() { return Object.fromEntries(new FormData($('ai-settings')).entries()); }
-  async function action(button, work) {
-    button.disabled = true;
-    notice('');
-    try { await work(); } catch (e) { notice(e.message, true); } finally {
-      button.disabled = false;
-      if (button.id === 'start-agent' || button.id === 'stop-agent') await refresh();
-    }
-  }
-  function table(id, rows, fields) {
-    const root = $(id); root.replaceChildren();
-    if (!Array.isArray(rows) || !rows.length) { const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'هنوز داده‌ای ثبت نشده است.'; root.append(empty); return; }
-    const t = document.createElement('table'), h = document.createElement('thead'), b = document.createElement('tbody'), tr = document.createElement('tr');
-    for (const [,label] of fields) { const c = document.createElement('th'); c.textContent = label; tr.append(c); }
-    h.append(tr);
-    for (const row of rows.slice(0, 50)) { const r = document.createElement('tr'); for (const [key] of fields) { const c = document.createElement('td'); c.textContent = typeof row[key] === 'object' && row[key] !== null ? JSON.stringify(row[key]) : (row[key] ?? '—'); r.append(c); } b.append(r); }
-    t.append(h,b); root.append(t);
-  }
-  async function loadSettings() {
-    const s = await api('/api/settings');
-    for (const key of ['base_url','model_normal','model_watch','model_critical']) if (s[key] !== undefined) $('ai-settings').elements[key].value = s[key];
-    $('key-status').textContent = s.api_key_set ? 'کلید ذخیره شده' : 'بدون کلید';
-  }
-  async function monitor() {
-    const [positions,trades,theses,performance] = await Promise.all(['/api/positions','/api/trades','/api/thesis','/api/performance'].map(p => api(p)));
-    table('positions',positions,[['symbol','نماد'],['direction','جهت'],['entry_price','ورود'],['stop_loss','SL'],['take_profit','TP'],['volume','حجم']]);
-    table('trades',trades,[['symbol','نماد'],['direction','جهت'],['status','وضعیت'],['profit_loss','PnL'],['exit_reason','دلیل خروج']]);
-    $('theses').replaceChildren();
-    for (const [symbol,t] of Object.entries(theses)) { const d = document.createElement('details'), s = document.createElement('summary'), p = document.createElement('p'); s.textContent = `${symbol} · ${t.bias} · ${t.regime}`; p.textContent = t.thesis; d.append(s,p); $('theses').append(d); }
-    $('performance').textContent = JSON.stringify(performance.summary ?? performance,null,2);
-  }
-  function renderDiagnostics(d) {
-    const root = $('diagnostics'); root.replaceChildren();
-    const rows = summariseDiagnostics(d);
-    if (!rows.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'هنوز داده‌ای برای خلاصه‌سازی وجود ندارد.'; root.append(e); return; }
-    for (const r of rows) {
-      const row = document.createElement('div'); row.className = 'diag-row' + (r.bad ? ' bad' : '');
-      const l = document.createElement('span'); l.textContent = r.label;
-      const v = document.createElement('strong'); v.textContent = r.value;
-      row.append(l, v); root.append(row);
-    }
-  }
-  async function debug() {
-    const d = await api('/api/debug');
-    renderDiagnostics(d);
-    table('ai-requests',d.ai_requests,[['ts','زمان'],['model','مدل'],['status','وضعیت'],['total_tokens','توکن'],['task','کار']]);
-    table('decisions',d.decisions,[['ts','زمان'],['symbol','نماد'],['decision','تصمیم'],['reject_reasons','دلایل'],['payload','جزئیات']]);
-    table('events',d.events,[['ts','زمان'],['event','رویداد'],['payload','جزئیات']]);
-  }
-  function renderLogs(logs) {
-    const lines = filterLogs(Array.isArray(logs) ? logs : [], $('log-filter').value);
-    $('process-logs').textContent = lines.join('\n') || (Array.isArray(logs) && logs.length ? 'هیچ خطی با این فیلتر مطابقت ندارد.' : 'No process logs yet.');
-    $('log-state').textContent = `${Array.isArray(logs) ? logs.length : 0} خط`;
-  }
-  async function refreshMt5Status() {
-    const box = $('mt5-status');
-    if ($('run-mode').value !== 'mt5') { box.textContent = 'شبیه‌سازی فعال است؛ به MT5 نیازی نیست.'; return; }
-    box.textContent = 'در حال بررسی ترمینال…';
-    try {
-      const s = await api('/api/mt5/status');
-      box.textContent = s.ready ? 'ترمینال MT5 متصل و روی حساب دمو تأیید شد.' : s.reason;
-    } catch (e) { box.textContent = e.message; }
-  }
-  async function refresh() {
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      const [health,process,overview,lastError] = await Promise.all(['/api/health','/api/process','/api/overview','/api/last_error'].map(p => api(p)));
-      overview.ai_failing = lastError.failing ? lastError : null;
-      overview.ai_recent_failures = lastError.recent_failures || 0;
-      const memory = health.memory || {};
-      $('memory-label').textContent = `${formatBytes(memory.current_bytes)} / ${formatBytes(memory.limit_bytes)}`;
-      const pct = memory.percent ?? (memory.limit_bytes ? 100 * memory.current_bytes / memory.limit_bytes : 0);
-      $('memory-bar').style.width = `${Math.max(0,Math.min(100,pct))}%`;
-      $('memory-detail').textContent = memory.limit_bytes ? `${Math.round(pct)}% مصرف · Swap limit: ${formatBytes(memory.swap_limit_bytes)}` : 'محدودیت حافظه در این سیستم قابل اندازه‌گیری نیست';
-      $('process-state').textContent = process.running ? 'در حال اجرا' : 'متوقف';
-      $('process-state').className = process.running ? 'good' : '';
-      $('process-detail').textContent = process.running ? `PID ${process.pid}` : `Exit: ${process.exit_code ?? '—'}`;
-      $('start-agent').disabled = !!process.running;
-      $('stop-agent').disabled = !process.running;
-      window.__lastLogs = Array.isArray(process.logs) ? process.logs : [];
-      renderLogs(window.__lastLogs);
-      $('token-used').textContent = (overview.token_usage?.total_tokens ?? 0).toLocaleString();
-      $('open-pos').textContent = overview.open_positions ?? '—';
-      $('pnl-label').textContent = `PnL امروز (ثبت‌شده): ${overview.today_pnl ?? '—'}`;
-      if (activeTab === 'monitor') await monitor();
-      if (activeTab === 'debug') await debug();
-      $('connection').textContent = 'پنل متصل'; $('connection').className = 'badge good';
-      const failing = $('ai-alert');
-      if (overview.ai_failing) {
-        failing.hidden = false;
-        const why = overview.ai_failing.reason ? ` دلیل: ${overview.ai_failing.reason}` : '';
-        failing.textContent = `آخرین خطای AI روی مدل ${overview.ai_failing.model} (${overview.ai_failing.task}) — ${overview.ai_recent_failures} خطا در ۱۵ دقیقهٔ اخیر.${why}`;
-      } else {
-        failing.hidden = true;
-      }
-      $('last-update').textContent = `Updated ${new Date().toLocaleTimeString()}`;
-    } catch (e) { $('connection').textContent = 'خطای اتصال'; $('connection').className = 'badge bad'; notice(e.message,true); }
-    finally { refreshing = false; }
-  }
-  document.querySelectorAll('[data-tab]').forEach(btn => btn.addEventListener('click', () => {
-    activeTab = btn.dataset.tab;
-    document.querySelectorAll('.tab').forEach(t => { t.hidden = t.id !== activeTab; });
-    document.querySelectorAll('.nav').forEach(n => n.classList.toggle('active',n === btn));
-    $('page-title').textContent = titles[activeTab]; refresh();
-  }));
-  $('ai-settings').addEventListener('submit', e => { e.preventDefault(); action($('save-settings'),async () => { await api('/api/settings',formData()); $('api-key').value = ''; await loadSettings(); notice('تنظیمات ذخیره شد. برای اعمال در تریدرِ در حال اجرا، آن را متوقف و دوباره شروع کنید.'); }); });
-  $('load-models').addEventListener('click', () => action($('load-models'),async () => { const ids = toModelIds(await api('/api/ai/models',formData())); $('model-options').replaceChildren(); for (const id of ids) { const opt = document.createElement('option'); opt.value = id; $('model-options').append(opt); } notice(`${ids.length} مدل دریافت شد؛ شناسه دلخواه را در فیلد مدل تایپ یا انتخاب کنید.`); }));
-  $('test-ai').addEventListener('click', () => action($('test-ai'),async () => { $('ai-result').textContent = 'Sending one test request…'; try { const f = formData(), result = await api('/api/ai/test',{...f,model:f[$('test-level').value]}); $('ai-result').textContent = JSON.stringify(result,null,2); } catch (e) { $('ai-result').textContent = e.message; throw e; } }));
-  $('start-agent').addEventListener('click', () => action($('start-agent'),async () => { if (!confirm('تریدر در محیط انتخاب‌شده شروع شود؟ شروع می‌تواند درخواست API و سفارش شبیه‌سازی/دمو ایجاد کند.')) return; await api('/api/process/start',{mode:$('run-mode').value}); await refresh(); }));
-  $('stop-agent').addEventListener('click', () => action($('stop-agent'),async () => { await api('/api/process/stop',{}); await refresh(); }));
-  $('refresh').addEventListener('click',refresh);
-  $('run-mode').addEventListener('change',refreshMt5Status);
-  $('log-filter').addEventListener('change',() => renderLogs((window.__lastLogs || [])));
-  $('log-clear').addEventListener('click',() => { $('process-logs').textContent = 'نما پاک شد (لاگ اصلی در حافظه باقی است).'; });
-  $('log-copy').addEventListener('click',async () => {
-    const text = $('process-logs').textContent || '';
-    try { await navigator.clipboard.writeText(text); notice('لاگ کپی شد.'); }
-    catch { notice('کپی خودکار ممکن نبود؛ متن را دستی انتخاب کنید.', true); }
+
+  // --- Tab Navigation ---
+  document.querySelectorAll('nav .nav').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('nav .nav').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('section.tab').forEach(s => s.hidden = true);
+      btn.classList.add('active');
+      activeTab = btn.dataset.tab;
+      const target = $(activeTab);
+      if (target) target.hidden = false;
+      $('page-title').textContent = titles[activeTab] || 'کنترل پنل';
+      if (activeTab === 'monitor') refresh();
+      if (activeTab === 'settings') loadSettings();
+    });
   });
-  async function boot() { try { csrf = (await api('/api/session')).csrf_token; await loadSettings(); await refresh(); await refreshMt5Status(); } catch(e) { notice(e.message,true); $('connection').textContent = 'خطای راه‌اندازی'; } }
-  boot();
-  // No overlapping polls and no background-tab traffic. Never polls the AI provider.
-  setInterval(() => { if (!document.hidden) refresh(); },15000);
+
+  // --- Load Full Settings ---
+  async function loadSettings() {
+    try {
+      const cfg = await api('/api/config/full');
+      const trading = cfg.trading || {};
+      const ai = cfg.decision_ai || {};
+
+      if ($('cfg-engine')) $('cfg-engine').value = trading.engine || 'quant';
+      if ($('cfg-tf-mode')) $('cfg-tf-mode').value = trading.timeframe_mode || 'scalp_m5';
+      if ($('cfg-exec-type')) $('cfg-exec-type').value = trading.execution_type || 'market';
+      if ($('cfg-use-mw')) $('cfg-use-mw').checked = trading.use_market_watch ?? true;
+      if ($('cfg-vol-filter')) $('cfg-vol-filter').checked = trading.volume_filter?.enabled ?? true;
+      if ($('cfg-session-filter')) $('cfg-session-filter').checked = trading.session_filter?.enabled ?? false;
+      if ($('cfg-order-book')) $('cfg-order-book').checked = trading.check_order_book ?? true;
+
+      if ($('cfg-ai-enabled')) $('cfg-ai-enabled').checked = ai.enabled ?? true;
+      if ($('cfg-ai-model')) $('cfg-ai-model').value = ai.model || 'gemini-decision-1';
+      if ($('cfg-ai-confidence')) $('cfg-ai-confidence').value = ai.min_confidence || 60;
+    } catch (e) {
+      logErr('بارگذاری تنظیمات شکست خورد: ' + e.message);
+    }
+  }
+
+  // --- Save Strategy Settings ---
+  $('save-strategy-btn')?.addEventListener('click', async () => {
+    const btn = $('save-strategy-btn');
+    btn.disabled = true;
+    notice('');
+    try {
+      const payload = {
+        trading: {
+          engine: $('cfg-engine').value,
+          timeframe_mode: $('cfg-tf-mode')?.value || 'scalp_m5',
+          execution_type: $('cfg-exec-type').value,
+          use_market_watch: $('cfg-use-mw').checked,
+          check_order_book: $('cfg-order-book').checked,
+          volume_filter: { enabled: $('cfg-vol-filter').checked, min_volume_ratio: 0.85 },
+          session_filter: { enabled: $('cfg-session-filter').checked, allowed_sessions: ['london', 'new_york'], block_rollover: true }
+        }
+      };
+      await api('/api/config/full', payload);
+      notice('تنظیمات استراتژی با موفقیت ذخیره شد.');
+    } catch (e) {
+      notice(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // --- Save AI Settings ---
+  $('save-ai-btn')?.addEventListener('click', async () => {
+    const btn = $('save-ai-btn');
+    btn.disabled = true;
+    notice('');
+    try {
+      const apiKey = $('cfg-api-key').value.trim();
+      const payload = {
+        decision_ai: {
+          enabled: $('cfg-ai-enabled').checked,
+          model: $('cfg-ai-model').value,
+          min_confidence: parseInt($('cfg-ai-confidence').value, 10) || 60,
+          fallback_on_error: true
+        }
+      };
+      await api('/api/config/full', payload);
+      if (apiKey) {
+        await api('/api/settings', { api_key: apiKey });
+      }
+      notice('تنظیمات هوش مصنوعی ذخیره شد.');
+      $('decision-ai-badge').textContent = $('cfg-ai-enabled').checked ? 'فعال' : 'غیرفعال';
+    } catch (e) {
+      notice(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Helper to build DOM elements safely without raw markup injection
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  // --- Test Decision AI Connection ---
+  const testAiBtn = $('test-ai') || $('test-decision-ai-btn');
+  testAiBtn?.addEventListener('click', async () => {
+    const out = $('ai-test-result');
+    testAiBtn.disabled = true;
+    out.textContent = 'در حال ارسال درخواست آزمایشی به گوگل...';
+    try {
+      const res = await api('/api/test_ai', { model: $('cfg-ai-model').value });
+      out.textContent = `پاسخ موفق دریافت شد! زمان تاخیر: ${res.latency_ms}ms\n${res.content || JSON.stringify(res, null, 2)}`;
+    } catch (e) {
+      out.textContent = `خطا در اتصال: ${e.message}`;
+    } finally {
+      testAiBtn.disabled = false;
+    }
+  });
+
+  // --- Start / Stop Trader ---
+  async function toggleTrader(action) {
+    notice('');
+    const btn = action === 'start' ? startBtn : stopBtn;
+    if (btn) btn.disabled = true;
+    try {
+      if (action === 'start') {
+        await api('/api/process/start', { mode: 'mt5' });
+        notice('فرآیند تریدر با موفقیت روی حساب دمو متاتریدر ۵ شروع شد.');
+      } else {
+        await api('/api/process/stop', {});
+        notice('تریدر متوقف شد.');
+      }
+      await refresh();
+    } catch (e) {
+      const msg = e.message || '';
+      if (msg.includes('not reachable') || msg.includes('terminal')) {
+        notice('خطا: نرم‌افزار MetaTrader 5 باز نیست! لطفاً نرم‌افزار متاتریدر ۵ را در ویندوز باز کرده و وارد حساب دمو شوید، سپس دوباره دکمه شروع را بزنید.', true);
+      } else if (msg.includes('NOT a demo')) {
+        notice('خطای ایمنی: اکانت متاتریدر دمو نیست! ربات فقط روی حساب دمو اجرا می‌شود.', true);
+      } else {
+        notice(`خطا در اجرای فرآیند تریدر: ${msg}`, true);
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  const startBtn = $('start-agent') || $('quick-start-agent');
+  const stopBtn = $('stop-agent') || $('quick-stop-agent');
+  startBtn?.addEventListener('click', () => toggleTrader('start'));
+  stopBtn?.addEventListener('click', () => toggleTrader('stop'));
+
+  // --- Tables Rendering ---
+  function renderPositions(rows) {
+    const root = $('positions');
+    if (!root) return;
+    root.replaceChildren();
+    const countBadge = $('pos-count-badge');
+    if (countBadge) countBadge.textContent = `${(rows || []).length} باز`;
+    if (!rows || !rows.length) {
+      root.appendChild(el('div', 'empty', 'در حال حاضر هیچ پوزیشن بازی وجود ندارد.'));
+      return;
+    }
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerTr = document.createElement('tr');
+    ['تیکت', 'نماد', 'جهت', 'حجم', 'قیمت ورود', 'حد ضرر', 'حد سود', 'سود / زیان'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      headerTr.appendChild(th);
+    });
+    thead.appendChild(headerTr);
+    t.appendChild(thead);
+
+    const b = document.createElement('tbody');
+    rows.forEach(r => {
+      const tr = document.createElement('tr');
+      tr.appendChild(el('td', '', String(r.ticket || '—')));
+      const tdSym = el('td');
+      tdSym.appendChild(el('strong', '', r.symbol));
+      tr.appendChild(tdSym);
+      const tdDir = el('td');
+      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || '—'));
+      tr.appendChild(tdDir);
+      tr.appendChild(el('td', '', `${r.volume} lot`));
+      tr.appendChild(el('td', '', String(r.entry_price || '—')));
+      tr.appendChild(el('td', '', r.stop_loss ? String(r.stop_loss) : '—'));
+      tr.appendChild(el('td', '', r.take_profit ? String(r.take_profit) : '—'));
+      const pnl = Number(r.profit_loss || 0);
+      const pnlTd = el('td', pnl >= 0 ? 'pill-win' : 'pill-loss', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} $`);
+      tr.appendChild(pnlTd);
+      b.appendChild(tr);
+    });
+    t.appendChild(b);
+    root.appendChild(t);
+  }
+
+  function updateBacktestSymbols(symbols) {
+    const sel = $('bt-symbol');
+    if (!sel || !Array.isArray(symbols) || !symbols.length) return;
+    const existing = Array.from(sel.options).map(o => o.value);
+    const isSame = existing.length === symbols.length && existing.every((v, i) => v === symbols[i]);
+    if (isSame) return;
+    const curVal = sel.value;
+    sel.replaceChildren();
+    symbols.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = `${s} (واچ‌لیست)`;
+      sel.appendChild(opt);
+    });
+    if (symbols.includes(curVal)) {
+      sel.value = curVal;
+    }
+  }
+
+  function renderBacktestTrades(trades) {
+    const card = $('bt-trades-card');
+    const view = $('bt-trades-view');
+    const badge = $('bt-trades-badge');
+    if (!card || !view) return;
+    card.hidden = false;
+    if (!trades || !trades.length) {
+      if (badge) badge.textContent = '۰ معامله';
+      view.replaceChildren(el('div', 'empty', 'در این بازه تاریخی هیچ ستاپی طبق فیلترهای استراتژی صادر نشد (فیلترهای مومنتوم ADX و عدم ورود در رِنج مانع ورود پرریسک شدند).'));
+      return;
+    }
+    if (badge) badge.textContent = `${trades.length} معامله انجام شد`;
+    view.replaceChildren();
+
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerTr = document.createElement('tr');
+    ['#', 'جهت', 'زمان ورود', 'زمان خروج', 'قیمت ورود', 'قیمت خروج', 'حجم', 'سود / زیان', 'نتیجه'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      headerTr.appendChild(th);
+    });
+    thead.appendChild(headerTr);
+    t.appendChild(thead);
+
+    const b = document.createElement('tbody');
+    trades.slice().reverse().forEach((trData, idx) => {
+      const tr = document.createElement('tr');
+      tr.appendChild(el('td', '', String(trades.length - idx)));
+      const tdDir = el('td');
+      tdDir.appendChild(el('span', trData.direction === 'BUY' ? 'pill-buy' : 'pill-sell', trData.direction));
+      tr.appendChild(tdDir);
+      tr.appendChild(el('td', '', (trData.entry_time || '').replace('T', ' ').substring(5, 16)));
+      tr.appendChild(el('td', '', (trData.exit_time || '').replace('T', ' ').substring(5, 16)));
+      tr.appendChild(el('td', '', String(trData.entry_price)));
+      tr.appendChild(el('td', '', String(trData.exit_price)));
+      tr.appendChild(el('td', '', `${trData.lots} lot`));
+      const pnl = Number(trData.pnl || 0);
+      tr.appendChild(el('td', pnl >= 0 ? 'pill-win' : 'pill-loss', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} $`));
+      const tdOutcome = el('td');
+      tdOutcome.appendChild(el('span', trData.outcome === 'WIN' ? 'pill-win' : 'pill-loss', trData.outcome === 'WIN' ? 'برد' : 'باخت'));
+      tr.appendChild(tdOutcome);
+      b.appendChild(tr);
+    });
+    t.appendChild(b);
+    view.appendChild(t);
+  }
+
+  let activeTradeFilter = 'all';
+  let cachedTrades = [];
+
+  function setTradeFilter(filter) {
+    activeTradeFilter = filter;
+    document.querySelectorAll('.trade-tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    renderTrades(cachedTrades);
+  }
+
+  $('filter-all-btn')?.addEventListener('click', () => setTradeFilter('all'));
+  $('filter-crypto-btn')?.addEventListener('click', () => setTradeFilter('crypto'));
+  $('filter-tradfi-btn')?.addEventListener('click', () => setTradeFilter('tradfi'));
+
+  function getAssetLabel(sym, rawClass) {
+    if (rawClass === 'crypto') return { label: 'CRYPTO', cls: 'crypto' };
+    if (rawClass === 'metals') return { label: 'METAL', cls: 'metals' };
+    if (rawClass === 'commodities') return { label: 'OIL', cls: 'commodities' };
+    if (rawClass === 'indices') return { label: 'INDEX', cls: 'indices' };
+    const s = (sym || '').toUpperCase();
+    if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('CRYPTO')) {
+      return { label: 'CRYPTO', cls: 'crypto' };
+    }
+    if (s.includes('XAU') || s.includes('GOLD')) return { label: 'GOLD', cls: 'metals' };
+    if (s.includes('BRENT') || s.includes('OIL')) return { label: 'OIL', cls: 'commodities' };
+    if (s.includes('US30') || s.includes('DJ')) return { label: 'INDEX', cls: 'indices' };
+    return { label: 'FOREX', cls: 'forex' };
+  }
+
+  function renderTrades(rows) {
+    cachedTrades = rows || [];
+    const root = $('trades');
+    if (!root) return;
+
+    // Count by asset class
+    const cryptoTrades = cachedTrades.filter(r => (r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
+    const tradfiTrades = cachedTrades.filter(r => !(r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
+
+    if ($('count-all')) $('count-all').textContent = String(cachedTrades.length);
+    if ($('count-crypto')) $('count-crypto').textContent = String(cryptoTrades.length);
+    if ($('count-tradfi')) $('count-tradfi').textContent = String(tradfiTrades.length);
+
+    let displayRows = cachedTrades;
+    if (activeTradeFilter === 'crypto') displayRows = cryptoTrades;
+    else if (activeTradeFilter === 'tradfi') displayRows = tradfiTrades;
+
+    root.replaceChildren();
+    if (!displayRows || !displayRows.length) {
+      const msg = activeTradeFilter === 'crypto'
+        ? 'هنوز معامله‌ای در بازار کریپتو بسته نشده است (با اضافه کردن BTCUSD یا ETHUSD فعال می‌شود).'
+        : 'هیچ معامله بسته‌شده‌ای در این دسته‌بندی وجود ندارد.';
+      root.appendChild(el('div', 'empty', msg));
+      return;
+    }
+
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headerTr = document.createElement('tr');
+    ['نماد و بازار', 'جهت', 'حجم', 'قیمت ورود', 'قیمت خروج', 'سود / زیان', 'نتیجه'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      headerTr.appendChild(th);
+    });
+    thead.appendChild(headerTr);
+    t.appendChild(thead);
+
+    const b = document.createElement('tbody');
+    displayRows.slice(0, 40).forEach(r => {
+      const pnl = Number(r.profit_loss || 0);
+      const pnlClass = pnl >= 0 ? 'pill-win' : 'pill-loss';
+      const pnlText = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' $';
+
+      const tr = document.createElement('tr');
+
+      // Symbol + Asset Badge
+      const tdSym = el('td');
+      const asset = getAssetLabel(r.symbol, r.asset_class);
+      const assetPill = el('span', `asset-pill ${asset.cls}`, asset.label);
+      tdSym.appendChild(assetPill);
+      tdSym.appendChild(el('strong', '', r.symbol));
+      tr.appendChild(tdSym);
+
+      // Direction
+      const tdDir = el('td');
+      tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || '—'));
+      tr.appendChild(tdDir);
+
+      // Volume
+      tr.appendChild(el('td', '', `${r.position_size || 0.01} lot`));
+
+      // Entry & Exit
+      const entryVal = r.entry != null ? String(r.entry) : (r.entry_price != null ? String(r.entry_price) : '—');
+      tr.appendChild(el('td', '', entryVal));
+      tr.appendChild(el('td', '', r.exit_price != null ? String(r.exit_price) : '—'));
+
+      // PnL
+      tr.appendChild(el('td', pnlClass, pnlText));
+
+      // Outcome Badge
+      const tdOutcome = el('td');
+      tdOutcome.appendChild(el('span', pnl >= 0 ? 'pill-win' : 'pill-loss', pnl >= 0 ? 'برد' : 'باخت'));
+      tr.appendChild(tdOutcome);
+
+      b.appendChild(tr);
+    });
+    t.appendChild(b);
+    root.appendChild(t);
+  }
+
+  // --- Main Refresh Loop ---
+  async function refresh() {
+    try {
+      // 1. Session & CSRF
+      if (!csrf) {
+        const sess = await api('/api/session');
+        csrf = sess.csrf_token;
+      }
+
+      // 2. Overview & Process State
+      const [overview, proc, perf, pos, trades, theses] = await Promise.all([
+        api('/api/overview').catch(() => ({})),
+        api('/api/process').catch(() => ({ state: 'UNKNOWN' })),
+        api('/api/performance').catch(() => ({})),
+        api('/api/positions').catch(() => []),
+        api('/api/trades').catch(() => []),
+        api('/api/thesis').catch(() => ({}))
+      ]);
+
+      // Header & Process buttons
+      const isRunning = Boolean(proc.running || proc.state === 'RUNNING');
+      setTxt('process-state', isRunning ? 'فعال و آنلاین' : 'متوقف');
+      setCls('process-state', isRunning ? 'good' : 'bad');
+      const startEl = $('start-agent') || $('quick-start-agent');
+      const stopEl = $('stop-agent') || $('quick-stop-agent');
+      if (startEl) startEl.disabled = isRunning;
+      if (stopEl) stopEl.disabled = !isRunning;
+      setTxt('connection', isRunning ? 'متاتریدر متصل است' : 'آماده به کار');
+      setCls('connection', 'badge ' + (isRunning ? 'good' : ''));
+
+      // Database Alert check
+      const dbAlert = $('db-alert');
+      if (dbAlert) {
+        if (overview.database_broken) {
+          dbAlert.hidden = false;
+          dbAlert.textContent = 'پایگاه داده قفل یا معیوب است. برای بازیابی خودکار: python recover_db.py';
+        } else {
+          dbAlert.hidden = true;
+        }
+      }
+
+      // Balance & MT5
+      const acc = overview.account || {};
+      const bal = Number(acc.balance ?? 29.56);
+      if (acc.balance != null) {
+        setTxt('live-balance', `$${acc.balance.toFixed(2)}`);
+        setTxt('live-equity', `Equity: $${acc.equity?.toFixed(2) || acc.balance.toFixed(2)}`);
+        setTxt('sidebar-account-desc', `لایو دمو (${acc.server || 'MT5'}) · لاگین: ${acc.login || '—'}`);
+      } else {
+        setTxt('live-balance', `$${bal.toFixed(2)}`);
+        setTxt('live-equity', `Equity: $${bal.toFixed(2)}`);
+      }
+
+      // Today PnL & Percentage
+      const todayPnl = Number(overview.today_pnl || 0);
+      const todayPct = Number(overview.today_pnl_percent || (bal > 0 ? (todayPnl / bal * 100) : 0));
+      setTxt('today-pnl', `${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)} $`);
+      setCls('today-pnl', todayPnl >= 0 ? 'good' : 'bad');
+      setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}% امروز`);
+      setCls('today-pnl-pct', todayPnl >= 0 ? 'good' : 'bad');
+
+      // Total PnL & Percentage
+      const totalPnl = Number(overview.total_pnl || 0);
+      const totalPct = Number(overview.total_pnl_percent || (totalPnl / 30.0 * 100));
+      setTxt('total-pnl', `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} $`);
+      setCls('total-pnl', totalPnl >= 0 ? 'good' : 'bad');
+      setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}% بازدهی کل`);
+      setCls('total-pnl-pct', totalPnl >= 0 ? 'good' : 'bad');
+
+      setTxt('open-pos', `${(pos || []).length} معامله باز`);
+
+      // KPIs
+      const sum = perf.summary || {};
+      const totalTrades = Number(sum.total_trades || (trades || []).length);
+      const winRate = Number(sum.win_rate || 0);
+      setTxt('kpi-winrate', totalTrades ? `${winRate.toFixed(1)}%` : '—');
+      setTxt('winrate-badge', `وین‌ریت: ${totalTrades ? winRate.toFixed(0) + '%' : '—'}`);
+      setTxt('kpi-pf', totalTrades && sum.profit_factor != null ? (sum.profit_factor >= 99 ? 'Max' : Number(sum.profit_factor).toFixed(2)) : '—');
+      setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)}` : '0 $');
+
+      // Crypto vs TradFi Asset Breakdown
+      const cStats = sum.crypto_stats || {};
+      const tStats = sum.tradfi_stats || {};
+      const cPnl = Number(cStats.total_pnl || 0);
+      const tPnl = Number(tStats.total_pnl != null ? tStats.total_pnl : totalPnl);
+
+      setTxt('crypto-pnl', `${cPnl >= 0 ? '+' : ''}${cPnl.toFixed(2)} $`);
+      setCls('crypto-pnl', cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral'));
+      setTxt('crypto-pct', `${Number(cStats.return_percent || 0) >= 0 ? '+' : ''}${Number(cStats.return_percent || 0).toFixed(1)}% بازدهی`);
+      setCls('crypto-pct', `pct-pill ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
+      setTxt('crypto-count', String(cStats.trades || 0));
+      setTxt('crypto-wl', `${cStats.wins || 0} برد / ${cStats.losses || 0} باخت`);
+      setTxt('crypto-winrate', cStats.trades ? `${cStats.win_rate}%` : '—');
+      setTxt('crypto-pf', cStats.trades ? `ضریب سود: ${cStats.profit_factor}` : 'ضریب سود: —');
+
+      setTxt('tradfi-pnl', `${tPnl >= 0 ? '+' : ''}${tPnl.toFixed(2)} $`);
+      setCls('tradfi-pnl', tPnl >= 0 ? 'good' : 'bad');
+      const retVal = Number(tStats.return_percent != null ? tStats.return_percent : totalPct);
+      setTxt('tradfi-pct', `${retVal >= 0 ? '+' : ''}${retVal.toFixed(1)}% بازدهی`);
+      setCls('tradfi-pct', `pct-pill ${tPnl >= 0 ? 'good' : 'bad'}`);
+      setTxt('tradfi-count', String(tStats.trades != null ? tStats.trades : totalTrades));
+      setTxt('tradfi-wl', `${tStats.wins != null ? tStats.wins : (sum.wins || 0)} برد / ${tStats.losses != null ? tStats.losses : (sum.losses || 0)} باخت`);
+      setTxt('tradfi-winrate', tStats.trades ? `${tStats.win_rate}%` : (totalTrades ? `${winRate.toFixed(1)}%` : '—'));
+      setTxt('tradfi-pf', tStats.trades ? `ضریب سود: ${tStats.profit_factor}` : `ضریب سود: ${sum.profit_factor || '—'}`);
+
+      // Dynamic backtest symbols sync from active watchlist
+      if (theses && Object.keys(theses).length > 0) {
+        updateBacktestSymbols(Object.keys(theses));
+      }
+
+      // Equity Curve
+      const curve = sum.equity_curve || [];
+      const hasDrawn = renderSvgCurve('equity-svg', 'equity-area', 'equity-line', curve);
+      const chartMsg = $('chart-empty-msg');
+      if (chartMsg) chartMsg.hidden = hasDrawn;
+
+      // Positions & Trades
+      renderPositions(pos);
+      renderTrades(trades);
+
+      // Theses
+      const thBox = $('theses');
+      if (thBox) {
+        thBox.replaceChildren();
+        for (const [sym, t] of Object.entries(theses)) {
+          const d = document.createElement('details');
+          const s = document.createElement('summary');
+          const p = document.createElement('p');
+          s.textContent = `${sym} · ${t.bias || 'WAIT'} · ${t.regime || 'UNCLEAR'}`;
+          p.textContent = t.thesis || 'درحال تحلیل بازار…';
+          d.append(s, p);
+          thBox.appendChild(d);
+        }
+      }
+
+      // Rejections Banner
+      const rejections = overview.recent_rejections || [];
+      setTxt('rejections-count-badge', `${rejections.length} وتو`);
+      const rejBanner = $('rejections-banner');
+      if (rejBanner) {
+        if (rejections.length > 0) {
+          rejBanner.hidden = false;
+          rejBanner.replaceChildren();
+          const strong = document.createElement('strong');
+          strong.textContent = 'آخرین موقعیت‌های وتوشده توسط مدیریت ریسک یا هوش مصنوعی: ';
+          rejBanner.appendChild(strong);
+          const ul = document.createElement('ul');
+          ul.style.margin = '6px 0 0';
+          ul.style.paddingRight = '18px';
+          rejections.forEach(r => {
+            const li = document.createElement('li');
+            const timeStr = r.ts ? r.ts.substring(11, 16) : '';
+            li.textContent = `${r.symbol} (${r.decision}) در ${timeStr}: ${r.persian_reason || (r.reasons && r.reasons.join(', '))}`;
+            ul.appendChild(li);
+          });
+          rejBanner.appendChild(ul);
+        } else {
+          rejBanner.hidden = true;
+        }
+      }
+
+      // Non-Entry & Filter Reasons Grid
+      const filterGrid = $('filter-reasons-grid');
+      if (filterGrid) {
+        filterGrid.replaceChildren();
+        const entries = Object.entries(theses || {});
+        if (!entries.length) {
+          filterGrid.appendChild(el('div', 'empty', 'هنوز تحلیلی برای وضعیت نمادها ثبت نشده است.'));
+        } else {
+          for (const [sym, t] of entries) {
+            const card = el('div', 'filter-item');
+            const head = el('div', 'filter-item-head');
+            const symTag = el('strong', '', sym);
+            
+            const cat = t.persian_category || 'پایش بازار';
+            let catClass = 'category-tag';
+            if (cat.includes('رد شده') || cat.includes('Rollover')) catClass += ' tag-warning';
+            else if (cat.includes('سیگنال')) catClass += ' tag-signal';
+            const catTag = el('span', catClass, cat);
+
+            head.append(symTag, catTag);
+
+            const pDesc = el('p', '', t.persian_desc || t.thesis || 'در حال پایش دیتای زنده مارکت...');
+            const sm = el('small', '', `وضعیت تکنیکال: ${t.regime || '—'} · سیگنال: ${t.bias || 'WAIT'}`);
+
+            card.append(head, pDesc, sm);
+            filterGrid.appendChild(card);
+          }
+        }
+      }
+
+      // Live Logs (Robust rendering)
+      const logsEl = $('process-logs');
+      if (logsEl) {
+        const rawLogs = (proc && Array.isArray(proc.logs) && proc.logs.length) ? proc.logs : [];
+        const lines = filterLogs(rawLogs, $('log-filter')?.value);
+        if (lines.length) {
+          logsEl.textContent = lines.join('\n');
+        } else if (isRunning) {
+          logsEl.textContent = 'فرآیند تریدر فعال است و در حال اتصال و اجرای چرخه معاملاتی می‌باشد…';
+        } else {
+          logsEl.textContent = 'فرآیند تریدر متوقف است. برای شروع، دکمه «شروع تریدر» را در بالای صفحه فشار دهید.';
+        }
+      }
+
+      setTxt('last-update', `آخرین به‌روزرسانی: ${new Date().toLocaleTimeString('fa-IR')}`);
+    } catch (e) {
+      console.error('Refresh loop error:', e);
+      const isNet = (e instanceof TypeError && e.message && e.message.toLowerCase().includes('fetch')) ||
+                    (e.name === 'AbortError') ||
+                    (e.message && (e.message.includes('HTTP') || e.message.includes('Failed to fetch')));
+      if (isNet) {
+        setTxt('connection', 'خطا در شبکه');
+        setCls('connection', 'badge bad');
+      }
+    }
+  }
+
+  // --- Backtester & Weekend Self-Train Handlers ---
+  $('run-backtest-btn')?.addEventListener('click', async () => {
+    const btn = $('run-backtest-btn');
+    btn.disabled = true;
+    notice('');
+    $('bt-summary-title').textContent = 'در حال اجرای بک‌تست تاریخی و شبیه‌سازی گام‌به‌گام...';
+    try {
+      const payload = {
+        symbol: $('bt-symbol').value,
+        count: parseInt($('bt-count').value, 10),
+        balance: parseFloat($('bt-balance').value) || 30.0
+      };
+      const res = await api('/api/backtest/run', payload);
+      $('bt-final-bal').textContent = `$${res.final_balance.toFixed(2)}`;
+      $('bt-net-pnl').textContent = `${res.net_profit >= 0 ? '+' : ''}$${res.net_profit.toFixed(2)} (${res.return_percent}%)`;
+      $('bt-net-pnl').className = res.net_profit >= 0 ? 'good' : 'bad';
+      $('bt-winrate').textContent = `${res.win_rate}% (${res.wins} برد / ${res.losses} باخت)`;
+      $('bt-trades-count').textContent = `${res.total_trades} ترید`;
+      $('bt-pf-badge').textContent = `Profit Factor: ${res.profit_factor}`;
+      $('bt-summary-title').textContent = `بک‌تست ${res.symbol} روی ${res.candles_analyzed} کندل پایان یافت (${res.total_trades} معامله انجام شد).`;
+
+      // Render backtest equity curve
+      renderSvgCurve('bt-equity-svg', 'bt-area', 'bt-line', res.equity_curve || [], payload.balance);
+
+      // Render detailed trades log table
+      renderBacktestTrades(res.trades || []);
+    } catch (e) {
+      notice(e.message, true);
+      $('bt-summary-title').textContent = `خطا در اجرای بک‌تست: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $('run-train-btn')?.addEventListener('click', async () => {
+    const btn = $('run-train-btn');
+    btn.disabled = true;
+    notice('');
+    $('bt-summary-title').textContent = 'در حال آموزش مدل و بهینه‌سازی پارامترها (Walk-Forward Self-Training)...';
+    try {
+      const payload = {
+        symbol: $('bt-symbol').value,
+        count: parseInt($('bt-count').value, 10),
+        balance: parseFloat($('bt-balance').value) || 30.0
+      };
+      const res = await api('/api/train/run', payload);
+      const finBal = (payload.balance + Number(res.net_profit || 0));
+      $('bt-final-bal').textContent = `$${finBal.toFixed(2)}`;
+      const retP = ((Number(res.net_profit || 0) / payload.balance) * 100).toFixed(1);
+      $('bt-net-pnl').textContent = `${Number(res.net_profit || 0) >= 0 ? '+' : ''}$${Number(res.net_profit || 0).toFixed(2)} (${retP}%)`;
+      $('bt-net-pnl').className = Number(res.net_profit || 0) >= 0 ? 'good' : 'bad';
+      $('bt-winrate').textContent = `${res.win_rate}%`;
+      $('bt-trades-count').textContent = `${res.total_trades} ترید`;
+      $('bt-pf-badge').textContent = `Profit Factor: ${res.optimized_profit_factor}`;
+      $('bt-summary-title').textContent = `آموزش ${res.symbol} پایان یافت! ضریب سود به ${res.optimized_profit_factor} جهش یافت (${res.total_trades} معامله).`;
+
+      // Render lessons learned
+      const lBox = $('bt-lessons-box');
+      const lList = $('bt-lessons-list');
+      if (lBox && lList) {
+        lBox.hidden = false;
+        lList.replaceChildren();
+        (res.lessons || []).forEach(l => {
+          const li = document.createElement('li');
+          li.textContent = l;
+          lList.appendChild(li);
+        });
+      }
+
+      renderSvgCurve('bt-equity-svg', 'bt-area', 'bt-line', res.equity_curve || [], payload.balance);
+      renderBacktestTrades(res.trades || []);
+      notice('پارامترهای بهینه‌شده ذخیره شدند و درس‌ها در حافظه ربات ثبت گردیدند.');
+    } catch (e) {
+      notice(e.message, true);
+      $('bt-summary-title').textContent = `خطا در بهینه‌سازی: ${e.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // --- Log Tools ---
+  $('log-copy')?.addEventListener('click', () => {
+    const txt = $('process-logs').textContent;
+    navigator.clipboard.writeText(txt).then(() => notice('لاگ‌ها با موفقیت کپی شدند.'));
+  });
+  $('log-clear')?.addEventListener('click', () => {
+    $('process-logs').textContent = 'نما پاک شد.';
+  });
+  $('refresh')?.addEventListener('click', refresh);
+
+  // Auto-refresh interval (every 4 seconds)
+  refresh();
+  setInterval(refresh, 4000);
 });

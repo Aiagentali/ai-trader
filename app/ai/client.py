@@ -180,13 +180,157 @@ class OpenAICompatProvider(AIProvider):
         raise err
 
 
+class GeminiProvider(AIProvider):
+    """Native Google Gemini API provider (generativelanguage.googleapis.com)."""
+
+    def __init__(self, api_key: str = None, base_url: str = None, timeout: int = 60):
+        self.api_key = api_key or os.environ.get("AI_API_KEY", "")
+        self.base_url = (base_url or os.environ.get("AI_BASE_URL",
+                         "https://generativelanguage.googleapis.com/v1beta")).rstrip("/")
+        self.timeout = timeout
+        if not self.api_key:
+            raise AIError("AI_API_KEY not set")
+
+    def _raise_http(self, status: int) -> None:
+        if status in (401, 403):
+            raise AIError(f"AI request failed: HTTP {status} — authentication rejected; "
+                          "check AI_API_KEY and permissions") from None
+        if status == 429:
+            raise AIError("AI request failed: HTTP 429 — rate limit/quota hit; "
+                          "retry later with backoff", retryable=True) from None
+        if status in (408, 500, 502, 503, 504):
+            raise AIError(f"AI request failed: HTTP {status} — transient upstream "
+                          "error; retry later", retryable=True) from None
+        raise AIError(f"AI request failed: HTTP {status}") from None
+
+    def list_models(self) -> list[str]:
+        req = urllib.request.Request(
+            f"{self.base_url}/models",
+            headers={"x-goog-api-key": self.api_key})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                raw = response.read(1_000_001)
+            data = json.loads(raw)
+            models = data.get("models", [])
+            result = []
+            for m in models:
+                name = m.get("name", "")
+                if name.startswith("models/"):
+                    name = name[len("models/"):]
+                if name:
+                    result.append(name)
+            return result
+        except urllib.error.HTTPError as exc:
+            self._raise_http(exc.code)
+        except Exception:
+            raise AIError("Model discovery failed; check URL and credentials") from None
+
+    def chat(self, system: str, user: str, model: str, max_tokens: int = 2000,
+             temperature: float = 0.2) -> dict:
+        budget = int(max_tokens)
+        partial = None
+        clean_model = model.split("/")[-1] if "/" in model else model
+        url = f"{self.base_url}/models/{clean_model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key
+        }
+
+        for attempt in range(MAX_BUDGET_ESCALATIONS + 1):
+            payload = {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": user}]
+                    }
+                ],
+                "generationConfig": {
+                    "temperature": temperature,
+                    "maxOutputTokens": budget,
+                    "responseMimeType": "application/json"
+                }
+            }
+            if system:
+                payload["system_instruction"] = {
+                    "parts": [{"text": system}]
+                }
+
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read(1_000_001)
+            except urllib.error.HTTPError as e:
+                status = e.code
+                e.close()
+                if attempt < MAX_BUDGET_ESCALATIONS and status in (500, 502, 503, 504):
+                    continue
+                self._raise_http(status)
+            except (urllib.error.URLError, TimeoutError, ConnectionError):
+                raise AIError("AI transport failed; check endpoint/connectivity and retry",
+                              retryable=True) from None
+            except Exception:
+                raise AIError("AI request failed; check provider configuration") from None
+
+            if len(raw) > 1_000_000:
+                raise AIError("AI response exceeds 1000000-byte limit")
+
+            try:
+                data = json.loads(raw)
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    raise AIError("AI returned no candidates; retry the analysis")
+                candidate = candidates[0]
+                finish = candidate.get("finishReason", "STOP").upper()
+                parts = candidate.get("content", {}).get("parts", [])
+                content = "".join(p.get("text", "") for p in parts)
+                usage = data.get("usageMetadata", {})
+            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+                raise AIError("Invalid AI response from Gemini; check response format") from None
+
+            if finish == "MAX_TOKENS":
+                partial = content if isinstance(content, str) else None
+                if attempt < MAX_BUDGET_ESCALATIONS:
+                    budget = min(budget * 2, MAX_TOKEN_BUDGET)
+                    continue
+                err = AIError("AI completion incomplete or filtered; no decision accepted")
+                err.partial = partial
+                raise err
+            if finish not in ("STOP", "FINISH_REASON_UNSPECIFIED"):
+                err = AIError(f"AI completion stopped with finishReason={finish}; no decision accepted")
+                err.partial = partial
+                raise err
+            if not isinstance(content, str) or not content.strip():
+                raise AIError("AI returned an empty completion; retry the analysis")
+
+            prompt_tokens = usage.get("promptTokenCount", 0)
+            completion_tokens = usage.get("candidatesTokenCount", 0)
+
+            return {
+                "content": content,
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "model": clean_model,
+                "reasoning_tokens": 0
+            }
+
+        err = AIError("AI completion incomplete after retries; no decision accepted")
+        err.partial = partial
+        raise err
+
+
 def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
     pin, pout = PRICING.get(model, (1.0, 2.0))
     return round((input_tokens * pin + output_tokens * pout) / 1_000_000, 6)
 
 
 def get_provider() -> AIProvider:
-    kind = os.environ.get("AI_PROVIDER", "openai-compat")
+    kind = os.environ.get("AI_PROVIDER", "openai-compat").lower()
+    if kind in ("gemini", "google"):
+        return GeminiProvider()
     if kind == "openai-compat":
         return OpenAICompatProvider()
     raise AIError(f"unknown provider kind {kind}")

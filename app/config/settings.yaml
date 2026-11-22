@@ -1,21 +1,42 @@
 trading:
   mode: demo
+  engine: quant   # quant (100% mathematical, zero AI) | ai | hybrid
+  timeframe_mode: scalp_m5 # scalp_m5 (M15 Trend + M5 Entry - fast scalping) | standard_m15 (H1 Trend + M15 Entry)
+  use_market_watch: true   # scan & trade ONLY symbols visible in MT5 Market Watch
   live_trading_enabled: false
+  execution_type: market   # market | limit (post-only at EMA pullback to minimize spread)
+  check_order_book: true   # check Level 2 book imbalance if supported by broker
+
+  session_filter:
+    enabled: false         # set true to restrict trades strictly to London & New York hours
+    allowed_sessions: ["london", "new_york"]
+    block_rollover: true   # blocks trades during 21:45-23:15 UTC (rollover spread spike)
+
+  volume_filter:
+    enabled: true          # requires tick volume >= 85% of 20-candle average
+    min_volume_ratio: 0.85
+
+decision_ai:
+  enabled: true            # true: optional Gemini Decision AI confirmation | false: pure quant
+  model: gemini-decision-1 # Google DeepMind Decision 1 (Zero-output token, calibrated probabilities)
+  min_confidence: 60
+  fallback_on_error: true  # zero-error guarantee: seamlessly falls back to quant on network/API spikes
 
 symbols:
   - EURUSD
+  - XAUUSD
+  - UKBRENT.F27
+  - US30CASH
   - GBPUSD
   - USDJPY
   - USDCHF
-  - AUDUSD
-  - USDCAD
 
 analysis:
   primary_timeframes: [D1, H4, H1, M15]
   execution_timeframes: [M5]
-  hourly_analysis: true
-  normal_interval_minutes: 60
-  watch_interval_minutes: 10
+  hourly_analysis: false
+  normal_interval_minutes: 1     # Check market every 1 minute
+  watch_interval_minutes: 1      # Check setup watch queue every 1 minute
 
 ai:
   daily_token_limit: 200000

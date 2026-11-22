@@ -9,6 +9,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, timezone
+from app.risk.engine import contract_size
 
 log = logging.getLogger("ai-trader.execution.mt5demo")
 
@@ -29,8 +30,8 @@ class MT5DemoExecutor:
         if live_trading_enabled:
             raise RuntimeError("MT5DemoExecutor: live_trading_enabled=True — refused")
 
-    def connect(self) -> bool:
-        """Initialize MT5 connection. Returns True on success."""
+    def connect(self, max_wait_sec: int = 35) -> bool:
+        """Initialize MT5 connection. Retries gracefully to allow user terminal startup/login."""
         try:
             import MetaTrader5 as mt5
             self._mt5 = mt5
@@ -38,25 +39,29 @@ class MT5DemoExecutor:
             log.error("MetaTrader5 package not available — run on Windows")
             return False
 
-        if not mt5.initialize():
-            log.error(f"MT5 initialize failed: {mt5.last_error()}")
-            return False
+        import time as _t
+        deadline = _t.time() + max_wait_sec
+        log.info(f"Connecting to MetaTrader 5 (allowing up to {max_wait_sec}s for terminal startup/login)...")
 
-        acc = mt5.account_info()
-        if acc is None:
-            log.error("MT5 account_info failed")
-            mt5.shutdown()
-            return False
+        while _t.time() < deadline:
+            if mt5.terminal_info() is not None or mt5.initialize(timeout=5000):
+                acc = mt5.account_info()
+                if acc is not None:
+                    if acc.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
+                        log.error(f"Account is NOT demo (trade_mode={acc.trade_mode}). "
+                                  "MT5DemoExecutor refuses live accounts.")
+                        mt5.shutdown()
+                        return False
 
-        if acc.trade_mode != mt5.ACCOUNT_TRADE_MODE_DEMO:
-            log.error(f"Account is NOT demo (trade_mode={acc.trade_mode}). "
-                      "MT5DemoExecutor refuses live accounts.")
-            mt5.shutdown()
-            return False
+                    log.info(f"MT5 Demo connected: login={acc.login} balance={acc.balance} server={acc.server}")
+                    self._connected = True
+                    return True
+                else:
+                    log.info("MT5 terminal detected; waiting for account login to complete...")
+            _t.sleep(2)
 
-        log.info(f"MT5 Demo connected: login={acc.login} balance={acc.balance}")
-        self._connected = True
-        return True
+        log.error(f"MT5 connect failed after {max_wait_sec}s. Ensure MT5 is running and logged in.")
+        return False
 
     def disconnect(self):
         if self._mt5 and self._connected:
@@ -144,6 +149,21 @@ class MT5DemoExecutor:
                 return {"request_id": request_id, "status": "REJECTED",
                         "reason": "tp_wrong_side"}
 
+        # Determine filling mode dynamically based on symbol / broker support
+        fm = getattr(info, "filling_mode", 0)
+        ioc = getattr(mt5, "ORDER_FILLING_IOC", 1)
+        fok = getattr(mt5, "ORDER_FILLING_FOK", 0)
+        ret = getattr(mt5, "ORDER_FILLING_RETURN", 2)
+
+        if fm == 1:
+            filling_type = fok
+        elif fm == 2:
+            filling_type = ioc
+        elif fm == 3:
+            filling_type = ioc
+        else:
+            filling_type = getattr(mt5, "ORDER_FILLING_IOC", ioc)
+
         req = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
@@ -156,7 +176,7 @@ class MT5DemoExecutor:
             "magic": 0,
             "comment": f"ai-trader:{request_id}",
             "type_time": mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling_type,
         }
 
         log.info(f"[MT5 DEMO] {direction} {symbol} {lots} @ {price} "
@@ -251,11 +271,17 @@ class MT5DemoExecutor:
         # Calculate PnL
         entry = position["entry_price"]
         sl = position.get("stop_loss")
-        if position["direction"] == "BUY":
-            pnl = (price - entry) * position["volume"] * CONTRACT_SIZE
+        sym_contract = contract_size(position["symbol"])
+        deals_fn = getattr(mt5, "history_deals_get", None)
+        deals = deals_fn(position=int(ticket)) if callable(deals_fn) else None
+        if deals:
+            realized_pnl = sum(d.profit + d.swap + d.commission for d in deals if d.entry in (1, 2))
+            pnl = realized_pnl if realized_pnl != 0 else (
+                ((price - entry) if position["direction"] == "BUY" else (entry - price)) * position["volume"] * sym_contract
+            )
         else:
-            pnl = (entry - price) * position["volume"] * CONTRACT_SIZE
-        risk = abs(entry - sl) * position["volume"] * CONTRACT_SIZE if sl else 1
+            pnl = ((price - entry) if position["direction"] == "BUY" else (entry - price)) * position["volume"] * sym_contract
+        risk = abs(entry - sl) * position["volume"] * sym_contract if sl else 1
         r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
         self.repo.close_position(str(ticket))
@@ -325,11 +351,17 @@ class MT5DemoExecutor:
                 exit_price = tick.bid if pos["direction"] == "BUY" else tick.ask
                 entry = pos["entry_price"]
                 sl = pos.get("stop_loss")
-                if pos["direction"] == "BUY":
-                    pnl = (exit_price - entry) * pos["volume"] * CONTRACT_SIZE
+                sym_contract = contract_size(pos["symbol"])
+                deals_fn = getattr(mt5, "history_deals_get", None)
+                deals = deals_fn(position=ticket) if callable(deals_fn) else None
+                if deals:
+                    realized_pnl = sum(d.profit + d.swap + d.commission for d in deals if d.entry in (1, 2))
+                    pnl = realized_pnl if realized_pnl != 0 else (
+                        ((exit_price - entry) if pos["direction"] == "BUY" else (entry - exit_price)) * pos["volume"] * sym_contract
+                    )
                 else:
-                    pnl = (entry - exit_price) * pos["volume"] * CONTRACT_SIZE
-                risk = abs(entry - sl) * pos["volume"] * CONTRACT_SIZE if sl else 1
+                    pnl = ((exit_price - entry) if pos["direction"] == "BUY" else (entry - exit_price)) * pos["volume"] * sym_contract
+                risk = abs(entry - sl) * pos["volume"] * sym_contract if sl else 1
                 r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
                 self.repo.close_position(pos["ticket"])

@@ -13,6 +13,7 @@ from flask import Flask, Blueprint, current_app, g, jsonify, render_template
 from app.database.models import DatabaseCorrupt
 from app.database.repository import Repository
 from app.journal.performance import PerformanceTracker
+from app.strategy.trainer import is_mt5_running
 
 dashboard = Blueprint("dashboard", __name__, template_folder="templates", static_folder="static")
 
@@ -40,9 +41,92 @@ def _get_repo():
 
 
 
+def _format_rejection_reason(reasons) -> str:
+    if isinstance(reasons, str):
+        try:
+            reasons = json.loads(reasons)
+        except Exception:
+            reasons = [reasons]
+    if not reasons:
+        return "عدم تأیید توسط مدیریت ریسک"
+    parts = []
+    for r in reasons:
+        r_lower = str(r).lower()
+        if "position size rounds to zero" in r_lower or "rounds to zero" in r_lower:
+            parts.append("سایز پوزیشن برای بالانس حساب کوچک‌تر از حداقل 0.01 لات شد")
+        elif "daily loss" in r_lower:
+            parts.append("حد ضرر مجاز روزانه فعال شده است")
+        elif "consecutive losses" in r_lower:
+            parts.append("تعداد زیان‌های متوالی به سقف رسید")
+        elif "spread" in r_lower:
+            parts.append("اسپرد از حد مجاز فراتر رفت")
+        elif "correlated" in r_lower:
+            parts.append("سقف ریسک همبستگی ارزها تکمیل شده است")
+        elif "risk reward" in r_lower or "rr" in r_lower:
+            parts.append("نسبت سود به زیان (R:R) کمتر از حد مجاز است")
+        else:
+            parts.append(str(r))
+    return " | ".join(parts)
+
+
+def _format_thesis_persian(bias: str, regime: str, thesis_text: str) -> dict:
+    t_lower = (thesis_text or "").lower()
+    r_lower = (regime or "").lower()
+    if "ranging_no_clear_trend" in r_lower or "mixed or flat" in t_lower:
+        return {
+            "desc": "روند کلی بازار رِنج/خنثی است؛ میانگین‌های متحرک جهت مشخصی ندارند (عدم ورود برای پرهیز از تله نوسانات)",
+            "category": "روند خنثی"
+        }
+    if "lacking directional momentum" in t_lower or "adx" in t_lower:
+        return {
+            "desc": "شاخص مومنتوم ADX در سطح پایینی است؛ بازار فاقد جهت‌گیری و شتاب حرکتی لازم برای ورود است",
+            "category": "مومنتوم ناکافی"
+        }
+    if "lacks institutional volume" in t_lower or "tick volume" in t_lower or "low_vol" in r_lower:
+        return {
+            "desc": "حجم تیک‌های معاملاتی کمتر از میانگین است؛ نقدینگی نهادی کافی برای جهش وجود ندارد",
+            "category": "حجم پایین"
+        }
+    if "rollover" in t_lower or "rollover" in r_lower:
+        return {
+            "desc": "ساعت تغییر شیفت روزانه بازار (Rollover) با اسپرد بسیار بالا؛ معاملات موقتاً قفل است",
+            "category": "ساعت تعویض شیفت"
+        }
+    if "outside allowed" in t_lower:
+        return {
+            "desc": "خارج از ساعات مجاز کاری بازارهای لندن و نیویورک",
+            "category": "خارج از نشست معاملاتی"
+        }
+    if "rejected" in t_lower:
+        return {
+            "desc": "فرصت معاملاتی شناسایی شد اما توسط فیلتر مدیریت ریسک و سرمایه رد گردید",
+            "category": "رد شده توسط ریسک"
+        }
+    if "watching_pullback" in r_lower or "waiting for high-probability" in t_lower:
+        return {
+            "desc": "جهت روند بازار شناسایی شده؛ در کمین پولبک به میانگین متحرک و کندل تأیید ورود هستیم",
+            "category": "در انتظار پولبک ورود"
+        }
+    if bias in ("BUY", "SELL"):
+        return {
+            "desc": f"موقعیت ورود فعال به صورت {bias} شناسایی شد",
+            "category": f"سیگنال {bias}"
+        }
+    return {
+        "desc": thesis_text or "در حال پایش دیتای زنده مارکت...",
+        "category": "تحلیل مارکت"
+    }
+
+
 @dashboard.route("/")
 def index():
     return render_template("index.html")
+
+
+@dashboard.route("/favicon.ico")
+def favicon():
+    """Silence browser favicon 404s."""
+    return "", 204
 
 
 @dashboard.route("/api/overview")
@@ -67,13 +151,73 @@ def api_overview():
     events = repo.conn.execute(
         "SELECT * FROM system_events ORDER BY id DESC LIMIT 10").fetchall()
 
+    # Recent rejections (last 5 setups vetoed by risk or AI)
+    rej_rows = repo.conn.execute(
+        "SELECT symbol, decision, reject_reasons, ts, payload FROM trade_decisions "
+        "WHERE decision IN ('BUY', 'SELL') AND approved = 0 "
+        "ORDER BY id DESC LIMIT 5"
+    ).fetchall()
+    recent_rejections = []
+    for r in rej_rows:
+        reasons = []
+        try:
+            reasons = json.loads(r["reject_reasons"] or "[]")
+        except Exception:
+            reasons = [r["reject_reasons"]] if r["reject_reasons"] else []
+        recent_rejections.append({
+            "symbol": r["symbol"],
+            "decision": r["decision"],
+            "ts": r["ts"],
+            "reasons": reasons,
+            "persian_reason": _format_rejection_reason(reasons)
+        })
+
+    acc_info = {"balance": None, "equity": None, "source": "unavailable", "server": None, "login": None}
+    if not current_app.config.get("TESTING") and is_mt5_running():
+        try:
+            import MetaTrader5 as mt5
+            term = getattr(mt5, "terminal_info", lambda: None)()
+            if term is not None or mt5.initialize(timeout=1000):
+                acc = mt5.account_info()
+                if acc:
+                    acc_info = {
+                        "balance": round(acc.balance, 2),
+                        "equity": round(acc.equity, 2),
+                        "login": acc.login,
+                        "server": acc.server,
+                        "currency": acc.currency,
+                        "source": "mt5_demo"
+                    }
+                # Sync MT5 open positions count
+                mt5_p = mt5.positions_get()
+                if mt5_p is not None:
+                    open_pos = mt5_p
+                # Sync MT5 today closed deals
+                now_dt = datetime.now(timezone.utc)
+                start_dt = datetime(now_dt.year, now_dt.month, now_dt.day, tzinfo=timezone.utc)
+                deals = mt5.history_deals_get(start_dt, now_dt)
+                if deals:
+                    mt5_today = round(sum(d.profit + d.swap + d.commission for d in deals if d.entry == 1), 2)
+                    if mt5_today != 0:
+                        today_pnl = mt5_today
+        except Exception:
+            pass
+
+    bal = acc_info.get("balance") or 30.0
+    base_capital = max(10.0, bal - total_pnl)
+    today_pnl_pct = round((today_pnl / base_capital * 100), 2)
+    total_pnl_pct = round((total_pnl / base_capital * 100), 2)
+
     return jsonify({
-        "account": {"balance": None, "equity": None, "source": "unavailable"},
+        "account": acc_info,
         "today_pnl": round(today_pnl, 2),
+        "today_pnl_percent": today_pnl_pct,
         "total_pnl": round(total_pnl, 2),
+        "total_pnl_percent": total_pnl_pct,
         "open_positions": len(open_pos),
         "token_usage": token,
         "system_events": [{"event": e["event"], "ts": e["ts"]} for e in events],
+        "recent_rejections": recent_rejections,
     })
 
 
@@ -82,16 +226,68 @@ def api_positions():
     """Open positions."""
     repo = _get_repo()
     pos = repo.open_positions()
+    if not current_app.config.get("TESTING") and is_mt5_running():
+        try:
+            import MetaTrader5 as mt5
+            if mt5.terminal_info() is not None or mt5.initialize(timeout=1000):
+                mt5_pos = mt5.positions_get()
+                if mt5_pos is not None:
+                    pos = [{
+                        "ticket": str(p.ticket),
+                        "symbol": p.symbol,
+                        "direction": "BUY" if p.type == 0 else "SELL",
+                        "volume": round(p.volume, 2),
+                        "entry_price": p.price_open,
+                        "stop_loss": p.sl,
+                        "take_profit": p.tp,
+                        "profit_loss": round(p.profit, 2),
+                        "time": datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat()
+                    } for p in mt5_pos]
+        except Exception:
+            pass
     return jsonify(pos)
+
+
+@dashboard.route("/api/symbols")
+def api_symbols():
+    """Get active watchlist symbols from config and MT5 Market Watch."""
+    from app.config.config_loader import load_symbols, load_settings
+    sym_cfg = load_symbols()
+    cfg_symbols = [s for s, v in sym_cfg["symbols"].items() if v.get("enabled", True)]
+    settings = load_settings()
+    mw_symbols = []
+    if not current_app.config.get("TESTING") and is_mt5_running():
+        try:
+            import MetaTrader5 as mt5
+            if mt5.terminal_info() is not None or mt5.initialize(timeout=1000):
+                symbols_info = mt5.symbols_get()
+                if symbols_info:
+                    mw_symbols = [s.name for s in symbols_info if s.visible]
+        except Exception:
+            pass
+    all_symbols = []
+    source_list = mw_symbols if (mw_symbols and settings.get("trading", {}).get("use_market_watch")) else cfg_symbols
+    for s in source_list:
+        if s not in all_symbols:
+            all_symbols.append(s)
+    if not all_symbols:
+        all_symbols = ["EURUSD", "XAUUSD", "UKBRENT.F27", "US30CASH", "GBPUSD", "USDJPY"]
+    return jsonify({"symbols": all_symbols})
 
 
 @dashboard.route("/api/trades")
 def api_trades():
-    """Recent closed trades."""
+    """Recent closed trades with asset class classification."""
     repo = _get_repo()
+    from app.journal.performance import get_asset_class
     rows = repo.conn.execute(
         "SELECT * FROM trades ORDER BY opened_ts DESC LIMIT 50").fetchall()
-    return jsonify([dict(r) for r in rows])
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["asset_class"] = get_asset_class(d.get("symbol"))
+        out.append(d)
+    return jsonify(out)
 
 
 @dashboard.route("/api/performance")
@@ -99,11 +295,13 @@ def api_performance():
     """Performance metrics."""
     repo = _get_repo()
     tracker = PerformanceTracker(repo)
+    sum_data = tracker.summary()
     return jsonify({
-        "summary": tracker.summary(),
+        "summary": sum_data,
         "by_symbol": tracker.breakdown_by("symbol"),
         "by_setup": tracker.breakdown_by("setup"),
         "by_regime": tracker.breakdown_by("market_regime"),
+        "by_asset_class": sum_data.get("by_asset_class", {}),
         "daily": tracker.daily_breakdown(),
         "reviews": tracker.review_summary(),
     })
@@ -120,16 +318,21 @@ def api_thesis():
     for sym in symbols:
         t = repo.latest_thesis(sym)
         if t:
+            p_info = _format_thesis_persian(t["bias"], t["regime"], t["thesis"])
             result[sym] = {
                 "bias": t["bias"],
                 "regime": t["regime"],
                 "thesis": t["thesis"],
                 "invalidation": t["invalidation"],
                 "ts": t["ts"],
+                "persian_desc": p_info["desc"],
+                "persian_category": p_info["category"],
             }
         else:
             result[sym] = {"bias": "NO_DATA", "regime": "UNKNOWN",
-                           "thesis": "No analysis yet", "ts": None}
+                           "thesis": "No analysis yet", "ts": None,
+                           "persian_desc": "هنوز تحلیلی برای این نماد ثبت نشده است",
+                           "persian_category": "بدون دیتا"}
     return jsonify(result)
 
 
@@ -172,6 +375,62 @@ def api_tokens():
         "usage": usage,
         "by_task": [dict(r) for r in requests],
     })
+
+
+@dashboard.route("/api/backtest/run", methods=["POST"])
+def api_backtest_run():
+    """Run walk-forward historical simulation on real MT5 candles."""
+    from flask import request
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "EURUSD")).upper()
+    count = min(5000, max(150, int(data.get("count", 1000))))
+    balance = max(10.0, float(data.get("balance", 30.0)))
+    
+    from app.strategy.trainer import run_backtest_simulation
+    res = run_backtest_simulation(symbol, count=count, initial_balance=balance)
+    return jsonify(res)
+
+
+@dashboard.route("/api/train/run", methods=["POST"])
+def api_train_run():
+    """Run weekend walk-forward self-training & error minimization."""
+    from flask import request
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "EURUSD")).upper()
+    count = min(5000, max(200, int(data.get("count", 1500))))
+    balance = max(10.0, float(data.get("balance", 30.0)))
+
+    from app.strategy.trainer import self_train_and_optimize
+    repo = _get_repo()
+    res = self_train_and_optimize(symbol, count=count, initial_balance=balance, repo=repo)
+    return jsonify(res)
+
+
+@dashboard.route("/api/config/full", methods=["GET", "POST"])
+def api_config_full():
+    """Load or update settings.yaml directly from the dashboard."""
+    import yaml
+    from app.config.config_loader import SETTINGS_FILE
+    from flask import request
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+
+        if "trading" in data:
+            cfg.setdefault("trading", {}).update(data["trading"])
+        if "decision_ai" in data:
+            cfg.setdefault("decision_ai", {}).update(data["decision_ai"])
+        if "analysis" in data:
+            cfg.setdefault("analysis", {}).update(data["analysis"])
+
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            yaml.safe_dump(cfg, f, default_flow_style=False, allow_unicode=True)
+        return jsonify({"ok": True, "message": "Settings updated successfully"})
+
+    with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    return jsonify(cfg)
 
 
 def create_app(config=None):

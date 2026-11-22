@@ -4,6 +4,18 @@ symbols:
     base: EUR
     quote: USD
     enabled: true
+  XAUUSD:
+    base: XAU
+    quote: USD
+    enabled: true
+  UKBRENT.F27:
+    base: BRENT
+    quote: USD
+    enabled: true
+  US30CASH:
+    base: US30
+    quote: USD
+    enabled: true
   GBPUSD:
     base: GBP
     quote: USD
@@ -25,8 +37,7 @@ symbols:
     quote: CAD
     enabled: true
 
-future_symbols:   # NOT enabled in V1
-  - XAUUSD
+future_symbols:   # Additional symbols
   - NZDUSD
   - EURJPY
   - GBPJPY

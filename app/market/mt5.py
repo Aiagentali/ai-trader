@@ -53,6 +53,12 @@ class MarketDataFeed:
     def connected(self) -> bool:
         raise NotImplementedError
 
+    def get_market_watch_symbols(self) -> list:
+        return []
+
+    def get_order_book(self, symbol: str) -> dict:
+        return None
+
 
 class MockFeed(MarketDataFeed):
     """Deterministic synthetic feed: seed per symbol so tests are reproducible."""
@@ -120,6 +126,12 @@ class MockFeed(MarketDataFeed):
     def connected(self) -> bool:
         return not self.stale
 
+    def get_market_watch_symbols(self) -> list:
+        return list(self.NORMAL_SPREAD.keys())
+
+    def get_order_book(self, symbol: str) -> dict:
+        return {"bid_volume": 60.0, "ask_volume": 40.0, "imbalance": 0.60}
+
 
 class MT5Feed(MarketDataFeed):
     """Real MetaTrader5 adapter (Windows). Import is deferred so this file is
@@ -172,6 +184,43 @@ class MT5Feed(MarketDataFeed):
 
     def connected(self) -> bool:
         return self.mt5.terminal_info() is not None
+
+    def get_market_watch_symbols(self) -> list:
+        if not self.connected():
+            return []
+        try:
+            symbols = self.mt5.symbols_get()
+            if not symbols:
+                return []
+            trade_disabled = getattr(self.mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+            return [
+                s.name for s in symbols
+                if getattr(s, "visible", False) and getattr(s, "trade_mode", 4) != trade_disabled
+            ]
+        except Exception:
+            return []
+
+    def get_order_book(self, symbol: str) -> dict:
+        """Returns depth of market imbalance: {'bid_volume': float, 'ask_volume': float, 'imbalance': float}
+        imbalance > 0.5 means buyers outweigh sellers. If broker doesn't support DOM, returns None.
+        """
+        if not self.connected():
+            return None
+        try:
+            self.mt5.market_book_add(symbol)
+            book = self.mt5.market_book_get(symbol)
+            self.mt5.market_book_release(symbol)
+            if not book:
+                return None
+            buy_type = getattr(self.mt5, "BOOK_TYPE_BUY", 1)
+            sell_type = getattr(self.mt5, "BOOK_TYPE_SELL", 2)
+            bid_vol = sum(b.volume for b in book if getattr(b, "type", 0) == buy_type)
+            ask_vol = sum(b.volume for b in book if getattr(b, "type", 0) == sell_type)
+            total = bid_vol + ask_vol
+            imbalance = round(bid_vol / total, 3) if total > 0 else 0.5
+            return {"bid_volume": bid_vol, "ask_volume": ask_vol, "imbalance": imbalance}
+        except Exception:
+            return None
 
 
 def create_feed(kind: str = "mock", **kw) -> MarketDataFeed:
