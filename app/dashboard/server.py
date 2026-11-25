@@ -62,6 +62,8 @@ def _format_rejection_reason(reasons) -> str:
             parts.append("اسپرد از حد مجاز فراتر رفت")
         elif "correlated" in r_lower:
             parts.append("سقف ریسک همبستگی ارزها تکمیل شده است")
+        elif "survival floor" in r_lower:
+            parts.append("بالانس حساب به حداقل کف ایمنی برای ترید رسیده است")
         elif "risk reward" in r_lower or "rr" in r_lower:
             parts.append("نسبت سود به زیان (R:R) کمتر از حد مجاز است")
         else:

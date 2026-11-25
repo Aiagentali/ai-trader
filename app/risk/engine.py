@@ -51,6 +51,9 @@ CURRENCY_LEG = {
 
 
 def _get_currency_leg(symbol: str) -> set:
+    if is_crypto_symbol(symbol):
+        clean = symbol.split(".")[0].upper()
+        return {f"{clean[:3]}_CRYPTO"}
     if symbol in CURRENCY_LEG:
         return set(CURRENCY_LEG[symbol])
     clean = symbol.split(".")[0]
@@ -220,12 +223,18 @@ class RiskEngine:
             res.reasons_reject.append("invalid SL/TP geometry")
             return res
 
-        # --- risk per trade ---
+        # --- risk per trade & survival balance floor ---
         balance = account.get("balance", 0.0)
+        allow_micro = cfg.get("allow_micro_lot_small_account", False) and balance < 500
+        min_bal = float(cfg.get("min_trading_balance", 12.0)) if cfg.get("allow_micro_lot_small_account", False) else 0.0
+        if min_bal > 0 and balance < min_bal:
+            res.reasons_reject.append(
+                f"balance ${balance:.2f} below survival floor ${min_bal:.2f}")
+            return res
+
         requested_risk = decision.get("position_size", {}).get("risk_percent")
         risk_pct = min(requested_risk, cfg["max_risk_per_trade"]) if requested_risk \
             else cfg["max_risk_per_trade"]
-        allow_micro = cfg.get("allow_micro_lot_small_account", False) and balance < 500
         max_micro_risk = cfg.get("max_small_account_risk_pct", 0.08)
         lots = calc_position_size(balance, risk_pct, entry, sl, symbol,
                                   allow_micro=allow_micro, max_micro_risk_pct=max_micro_risk)
@@ -243,9 +252,12 @@ class RiskEngine:
 
         # --- daily loss ---
         u = self._daily_pnl()
-        if u <= -cfg["max_daily_loss"] * balance:
+        eff_daily_loss = cfg["max_daily_loss"]
+        if allow_micro and balance < 200:
+            eff_daily_loss = max(eff_daily_loss, cfg.get("max_small_account_daily_loss", 0.12))
+        if u <= -eff_daily_loss * balance:
             res.reasons_reject.append(
-                f"daily loss limit hit ({u:.2f} <= {-cfg['max_daily_loss'] * balance:.2f})")
+                f"daily loss limit hit ({u:.2f} <= {-eff_daily_loss * balance:.2f})")
 
         # --- open positions cap ---
         open_pos = self.repo.open_positions()
@@ -301,9 +313,11 @@ class RiskEngine:
         return sum((r["profit_loss"] or 0.0) for r in closed)
 
     def _consecutive_losses(self) -> int:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         rows = self.repo.conn.execute(
             "SELECT profit_loss FROM trades WHERE status='closed' "
-            "ORDER BY exit_ts DESC LIMIT 20").fetchall()
+            "AND substr(exit_ts,1,10)=? ORDER BY exit_ts DESC LIMIT 20", (today,)).fetchall()
         n = 0
         for r in rows:
             if (r["profit_loss"] or 0.0) < 0:
