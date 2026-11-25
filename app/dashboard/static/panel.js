@@ -854,7 +854,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       tr.appendChild(el('td', '', (a.exit_ts || '').replace('T', ' ').slice(5, 16) || 'N/A'));
       tr.appendChild(el('td', 'pill-loss', `${Number(a.profit_loss || 0).toFixed(2)} $`));
       tr.appendChild(el('td', '', a.classification || 'LOSS_CLOSED'));
-      tbody.appendChild(tr.appendChild(el('td', 'reason-cell', a.review || 'بررسی خودکار ثبت نشده؛ در حال پایش الگوی بعدی.')).parentElement);
+      tr.appendChild(el('td', 'reason-cell', a.review || 'بررسی خودکار ثبت نشده؛ در حال پایش الگوی بعدی.'));
+      tbody.appendChild(tr);
     });
 
     learnedEntries.forEach(([sym, prof]) => {
@@ -927,8 +928,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}%`);
       setCls('today-pnl-pct', `num ${todayPnl >= 0 ? 'good' : 'bad'}`);
 
-      const totalPnl = Number(overview.total_pnl || 0);
-      const totalPct = Number(overview.total_pnl_percent || (totalPnl / 30.0 * 100));
+      const totalPnl = Number(overview.total_pnl != null ? overview.total_pnl : 0);
+      const totalPct = Number(overview.total_pnl_percent != null ? overview.total_pnl_percent : (totalPnl / 30.0 * 100));
       setTxt('total-pnl', `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} $`);
       setCls('total-pnl', `ticker-v num ${totalPnl >= 0 ? 'good' : 'bad'}`);
       setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}%`);

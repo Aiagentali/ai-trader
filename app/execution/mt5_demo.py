@@ -337,9 +337,10 @@ class MT5DemoExecutor:
                 "sl": new_sl, "tp": new_tp}
 
     def check_sl_tp(self):
-        """Check open positions for SL/TP hits via MT5 position status."""
+        """Check open positions for SL/TP hits via MT5 position status. Returns closed trade IDs."""
+        closed_ids = []
         if not self._connected or not self._mt5:
-            return
+            return closed_ids
 
         mt5 = self._mt5
         open_pos = self.repo.open_positions()
@@ -367,6 +368,8 @@ class MT5DemoExecutor:
                 r_mult = round(pnl / risk, 2) if risk > 0 else 0.0
 
                 self.repo.close_position(pos["ticket"])
-                self.repo.close_trade(pos["ticket"], exit_price, pnl, r_mult,
-                                      "mt5_sl_tp_hit")
-                log.info(f"MT5 SL/TP hit: {pos['ticket']} @ {exit_price}")
+                matched = self.repo.close_trade(pos["ticket"], exit_price, pnl, r_mult,
+                                                "mt5_sl_tp_hit")
+                log.info(f"MT5 SL/TP hit: {pos['ticket']} @ {exit_price} PnL={pnl:.2f}")
+                closed_ids.append(matched or str(pos["ticket"]))
+        return closed_ids

@@ -194,14 +194,19 @@ def api_overview():
                 mt5_p = mt5.positions_get()
                 if mt5_p is not None:
                     open_pos = mt5_p
-                # Sync MT5 today closed deals
+                # Sync MT5 today & total closed deals
                 now_dt = datetime.now(timezone.utc)
                 start_dt = datetime(now_dt.year, now_dt.month, now_dt.day, tzinfo=timezone.utc)
                 deals = mt5.history_deals_get(start_dt, now_dt)
                 if deals:
-                    mt5_today = round(sum(d.profit + d.swap + d.commission for d in deals if d.entry == 1), 2)
+                    mt5_today = round(sum(d.profit + d.swap + d.commission for d in deals if d.entry in (1, 2)), 2)
                     if mt5_today != 0:
                         today_pnl = mt5_today
+                all_deals = mt5.history_deals_get(datetime(2020, 1, 1, tzinfo=timezone.utc), now_dt)
+                if all_deals:
+                    mt5_total = round(sum(d.profit + d.swap + d.commission for d in all_deals if d.entry in (1, 2)), 2)
+                    if any(d.entry in (1, 2) for d in all_deals):
+                        total_pnl = mt5_total
         except Exception:
             pass
 
@@ -282,6 +287,7 @@ def api_trades():
     """Recent trades with asset class classification and post-mortem review."""
     repo = _get_repo()
     from app.journal.performance import get_asset_class
+    from app.journal.weekly_audit import _classify_loss_source
     rows = repo.conn.execute(
         "SELECT t.*, r.classification AS review_class, r.review AS review_text "
         "FROM trades t LEFT JOIN trade_reviews r ON t.trade_id = r.trade_id "
@@ -290,6 +296,10 @@ def api_trades():
     for r in rows:
         d = dict(r)
         d["asset_class"] = get_asset_class(d.get("symbol"))
+        if (d.get("profit_loss") or 0) < 0 and not d.get("review_text"):
+            cat, note = _classify_loss_source(d, d.get("review_class") or "")
+            d["review_class"] = d.get("review_class") or cat
+            d["review_text"] = note
         out.append(d)
     return jsonify(out)
 
@@ -298,18 +308,45 @@ def api_trades():
 def api_performance():
     """Performance metrics, loss post-mortems, and learned profiles."""
     repo = _get_repo()
-    tracker = PerformanceTracker(repo)
-    sum_data = tracker.summary()
+    from app.journal.weekly_audit import _classify_loss_source
+    curr_bal = None
+    if not current_app.config.get("TESTING") and is_mt5_running():
+        try:
+            import MetaTrader5 as mt5
+            if mt5.terminal_info() is not None or mt5.initialize(timeout=500):
+                acc = mt5.account_info()
+                if acc:
+                    curr_bal = float(acc.balance)
+        except Exception:
+            pass
 
-    # Recent loss reviews
+    tracker = PerformanceTracker(repo)
+    sum_data = tracker.summary(current_balance=curr_bal)
+
+    # Recent loss reviews (backfill deterministic post-mortem if no DB review exists)
     loss_rows = repo.conn.execute(
-        "SELECT t.trade_id, t.symbol, t.direction, t.profit_loss, t.exit_ts, t.setup, "
-        "r.classification, r.review FROM trades t "
+        "SELECT t.*, r.classification, r.review FROM trades t "
         "LEFT JOIN trade_reviews r ON t.trade_id = r.trade_id "
         "WHERE t.status='closed' AND t.profit_loss < 0 "
         "ORDER BY t.exit_ts DESC LIMIT 10"
     ).fetchall()
-    loss_audits = [dict(r) for r in loss_rows]
+    loss_audits = []
+    for r in loss_rows:
+        d = dict(r)
+        if not d.get("review"):
+            cat, note = _classify_loss_source(d, d.get("classification") or "")
+            d["classification"] = d.get("classification") or cat
+            d["review"] = note
+        loss_audits.append({
+            "trade_id": d.get("trade_id"),
+            "symbol": d.get("symbol"),
+            "direction": d.get("direction"),
+            "profit_loss": d.get("profit_loss"),
+            "exit_ts": d.get("exit_ts"),
+            "setup": d.get("setup"),
+            "classification": d.get("classification"),
+            "review": d.get("review"),
+        })
 
     learned = {}
     try:
