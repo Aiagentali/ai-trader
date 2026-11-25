@@ -4,12 +4,36 @@ from dataclasses import dataclass, field
 
 CONTRACT_SIZE = 100_000  # standard lot
 
+CRYPTO_TOKENS = ("BTC", "ETH", "SOL", "BNB", "LTC", "XRP", "DOGE", "ADA", "AVAX", "DOT", "LINK", "TON")
+
+
+def is_crypto_symbol(symbol: str) -> bool:
+    s = (symbol or "").upper()
+    return any(tok in s for tok in CRYPTO_TOKENS) or "CRYPTO" in s
+
+
+def is_market_open(symbol: str, now_utc=None) -> bool:
+    """Crypto trades 24/7. TradFi (Forex/Metals/Oil/Indices) closes Fri 21:55 UTC to Sun 22:00 UTC."""
+    if is_crypto_symbol(symbol):
+        return True
+    from datetime import datetime, timezone
+    dt = now_utc or datetime.now(timezone.utc)
+    wd = dt.weekday()  # Mon=0 .. Fri=4, Sat=5, Sun=6
+    hour = dt.hour + dt.minute / 60.0
+    if wd == 5:
+        return False
+    if wd == 4 and hour >= 21.92:
+        return False
+    if wd == 6 and hour < 22.0:
+        return False
+    return True
+
 
 def contract_size(symbol: str) -> float:
     s = symbol.upper()
     if "XAU" in s or "GOLD" in s:
         return 100.0
-    if any(c in s for c in ("BTC", "ETH", "SOL", "BNB", "LTC", "XRP")):
+    if is_crypto_symbol(s):
         return 1.0
     if "BRENT" in s or "OIL" in s or "WTI" in s:
         return 100.0
@@ -152,7 +176,25 @@ class RiskEngine:
         from app.market.mt5 import MockFeed
         if isinstance(self.feed, MockFeed):
             return MockFeed.NORMAL_SPREAD.get(symbol, 0.0002)
-        return pip_size(symbol) * 1.5
+        s = (symbol or "").upper()
+        if is_crypto_symbol(s):
+            tick = self.feed.get_tick(symbol) if hasattr(self.feed, "get_tick") else None
+            price = (tick or {}).get("bid") or 0.0
+            if price > 0:
+                # Crypto spreads on retail/demo CFD brokers are typically 0.04% to 0.12% of price
+                return max(pip_size(symbol) * 2.0, price * 0.0008)
+            if "BTC" in s:
+                return 60.0
+            if "ETH" in s:
+                return 2.5
+            return pip_size(symbol) * 15.0
+        if "XAU" in s or "GOLD" in s:
+            return max(pip_size(symbol) * 2.5, 0.35)
+        if "BRENT" in s or "OIL" in s or "WTI" in s:
+            return max(pip_size(symbol) * 2.5, 0.05)
+        if "US30" in s or "WS30" in s or s.startswith("DJ") or "DOW" in s:
+            return max(pip_size(symbol) * 3.0, 3.0)
+        return pip_size(symbol) * 1.8
 
     def validate(self, decision: dict, account: dict) -> RiskResult:
         res = RiskResult(approved=False)

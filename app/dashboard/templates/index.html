@@ -3,241 +3,214 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Trader Pro · میز معاملاتی الگوریتمی</title>
+  <title>AI Trader Pro · ترمینال معاملاتی</title>
   <link rel="stylesheet" href="/static/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>">
   <script src="/static/panel.js" defer></script>
 </head>
 <body>
-  <!-- System Sidebar Navigation -->
   <aside>
     <div class="brand" dir="ltr">
       <span class="brand-mark">AT</span>
       <div class="brand-text">
         <span class="brand-name">ai-trader</span>
-        <span class="brand-sub">WORKSTATION</span>
+        <span class="brand-sub">TERMINAL v2</span>
       </div>
     </div>
 
     <nav aria-label="بخش‌های اصلی پنل">
       <button type="button" class="nav active" data-tab="monitor">
-        <span class="nav-title">داشبورد و پرتفوی</span>
+        <span class="nav-title">میز معاملات و پایپ‌لاین</span>
         <span class="nav-num">01</span>
       </button>
       <button type="button" class="nav" data-tab="settings">
-        <span class="nav-title">پیکربندی استراتژی و AI</span>
+        <span class="nav-title">تنظیمات استراتژی و AI</span>
         <span class="nav-num">02</span>
       </button>
       <button type="button" class="nav" data-tab="backtest">
-        <span class="nav-title">شبیه‌ساز و خودآموزی</span>
+        <span class="nav-title">بک‌تست و بهینه‌سازی</span>
         <span class="nav-num">03</span>
       </button>
       <button type="button" class="nav" data-tab="debug">
-        <span class="nav-title">کنسول لاگ و سلامت</span>
+        <span class="nav-title">کنسول لاگ و عیب‌یابی</span>
         <span class="nav-num">04</span>
       </button>
     </nav>
 
     <div class="sidebar-system-info">
       <div class="terminal-meta-header">
-        <span class="terminal-status-dot"></span>
-        <span>اطلاعات اتصال متاتریدر</span>
+        <span class="terminal-status-dot" id="terminal-dot"></span>
+        <span>اتصال متاتریدر ۵</span>
       </div>
       <div class="terminal-badges">
         <span class="badge badge-broker" id="mt5-badge">MT5 DEMO</span>
-        <span class="badge" id="mt5-status">MT5: بررسی نشده</span>
+        <span class="badge" id="mt5-status">بررسی نشده</span>
       </div>
-      <p id="sidebar-account-desc">در انتظار برقراری اتصال به ترمینال معاملاتی MT5...</p>
+      <p id="sidebar-account-desc">در انتظار همگام‌سازی با ترمینال...</p>
     </div>
   </aside>
 
-  <!-- Main Workstation Area -->
   <main>
-    <!-- Top Workstation Header -->
+    <!-- Compact Terminal Top Bar -->
     <header class="workstation-header">
       <div class="header-titles">
         <div class="header-breadcrumbs">
-          <span class="eyebrow" id="header-eyebrow">METATRADER 5 / ALGORITHMIC TRADING</span>
-          <span class="env-tag">DEMO ACCOUNT</span>
+          <span class="eyebrow" id="header-eyebrow">METATRADER 5 / QUANT + DECISION AI</span>
+          <span class="env-tag">DEMO</span>
         </div>
-        <h1 id="page-title">داشبورد معاملات و رشد سرمایه</h1>
+        <h1 id="page-title">میز معاملات و پایپ‌لاین تصمیم‌گیری</h1>
       </div>
 
       <div class="header-controls">
         <div class="telemetry-strip">
           <span id="memory-label" class="telemetry-pill">RAM: N/A</span>
-          <span id="connection" class="telemetry-pill">آماده به کار</span>
+          <span id="connection" class="telemetry-pill">آماده</span>
         </div>
         <div class="action-buttons">
           <button type="button" id="start-agent" class="btn btn-exec">شروع تریدر</button>
           <button type="button" id="stop-agent" class="btn btn-halt" disabled>توقف</button>
-          <button type="button" id="refresh" class="btn btn-icon" aria-label="تازه‌سازی داده‌ها" title="تازه‌سازی داده‌ها">↻</button>
+          <button type="button" id="refresh" class="btn btn-icon" aria-label="تازه‌سازی" title="تازه‌سازی">↻</button>
         </div>
       </div>
     </header>
 
-    <!-- Global Notice & System Alerts -->
     <div id="notice" role="status" aria-live="polite" hidden></div>
     <div id="ai-alert" class="alert-box alert-warning" role="alert" hidden></div>
     <div id="db-alert" class="alert-box alert-danger" role="alert" hidden></div>
 
-    <!-- Executive KPI Ribbon (Compact, Tabular Figures) -->
-    <section class="kpi-ribbon" aria-label="شاخص‌های عملکردی حساب">
+    <!-- Account & Portfolio Ticker Strip -->
+    <section class="kpi-ribbon" aria-label="خلاصه حساب">
       <div class="kpi-cell">
-        <span class="kpi-label">وضعیت فرآیند تریدر</span>
+        <span class="kpi-label">وضعیت ربات</span>
         <div class="kpi-val" id="process-state">متوقف</div>
-        <span class="kpi-sub" id="process-detail">آماده پایش نمادهای فعال</span>
+        <span class="kpi-sub" id="process-detail">آماده پایش</span>
       </div>
-
       <div class="kpi-cell">
-        <span class="kpi-label">موجودی نقدی (Balance)</span>
+        <span class="kpi-label">بالانس / اکوئیتی</span>
         <div class="kpi-val num" id="live-balance">$0.00</div>
         <span class="kpi-sub num" id="live-equity">Equity: $0.00</span>
       </div>
-
       <div class="kpi-cell">
         <span class="kpi-label">سود و زیان امروز</span>
         <div class="kpi-val num" id="today-pnl">+0.00 $</div>
-        <span class="kpi-sub num" id="today-pnl-pct">0.0% بازدهی روز</span>
+        <span class="kpi-sub num" id="today-pnl-pct">0.0%</span>
       </div>
-
       <div class="kpi-cell">
         <span class="kpi-label">سود کل تحقق‌یافته</span>
         <div class="kpi-val num" id="total-pnl">+0.00 $</div>
-        <span class="kpi-sub num" id="total-pnl-pct">+0.0% بازدهی کل</span>
+        <span class="kpi-sub num" id="total-pnl-pct">0.0%</span>
       </div>
-
       <div class="kpi-cell">
-        <span class="kpi-label">پوزیشن‌های جاری</span>
-        <div class="kpi-val" id="open-pos">0 پوزیشن</div>
-        <span class="kpi-sub" id="winrate-badge">وین‌ریت: 0%</span>
+        <span class="kpi-label">پوزیشن‌های باز</span>
+        <div class="kpi-val num" id="open-pos">0</div>
+        <span class="kpi-sub num" id="winrate-badge">وین‌ریت کل: 0%</span>
       </div>
     </section>
 
-    <!-- TAB 1: MONITOR & PORTFOLIO -->
+    <!-- TAB 1: TERMINAL WORKSPACE -->
     <section id="monitor" class="tab-pane">
-      <!-- Asset Segmentation Strip: Crypto vs TradFi (Forex/Metals/Oil) -->
-      <div class="asset-segmentation-grid">
-        <!-- Crypto Performance Workstation Card -->
-        <article class="panel-box asset-crypto-box">
-          <div class="panel-box-header">
-            <div class="asset-identity">
-              <span class="asset-symbol-mark crypto-mark">₿</span>
-              <div>
-                <h2 class="panel-title">معاملات رمز ارزها (Crypto)</h2>
-                <span class="panel-subtitle">بیت‌کوین (BTCUSD) و اتریوم (ETHUSD) / بازار ۲۴ ساعته</span>
-              </div>
-            </div>
-            <span class="status-pill status-crypto">CRYPTO 24/7</span>
+      <!-- Compact Crypto vs TradFi Asset Comparison Bar -->
+      <div class="asset-strip">
+        <div class="asset-strip-item crypto-accent">
+          <div class="asset-strip-head">
+            <span class="asset-tag-pill crypto">CRYPTO 24/7</span>
+            <span class="asset-sub">BTCUSD / ETHUSD / SOLUSD</span>
           </div>
-
-          <div class="asset-metrics-deck">
-            <div class="deck-item">
-              <span class="deck-label">سود / زیان خالص</span>
-              <span class="deck-value num neutral" id="crypto-pnl">+0.00 $</span>
-              <span class="deck-badge num neutral" id="crypto-pct">0.0% بازدهی</span>
-            </div>
-            <div class="deck-item">
-              <span class="deck-label">تعداد معاملات</span>
-              <span class="deck-value num" id="crypto-count">0</span>
-              <span class="deck-sub num" id="crypto-wl">0 برد / 0 باخت</span>
-            </div>
-            <div class="deck-item">
-              <span class="deck-label">نرخ برد (Win Rate)</span>
-              <span class="deck-value num" id="crypto-winrate">N/A</span>
-              <span class="deck-sub num" id="crypto-pf">ضریب سود: N/A</span>
-            </div>
-          </div>
-        </article>
-
-        <!-- TradFi (Forex & Commodities) Workstation Card -->
-        <article class="panel-box asset-tradfi-box">
-          <div class="panel-box-header">
-            <div class="asset-identity">
-              <span class="asset-symbol-mark tradfi-mark">FX</span>
-              <div>
-                <h2 class="panel-title">فارکس، طلا و کالاها (TradFi)</h2>
-                <span class="panel-subtitle">EURUSD، انس طلا (XAUUSD)، نفت و شاخص‌ها</span>
-              </div>
-            </div>
-            <span class="status-pill status-tradfi">FOREX & METALS</span>
-          </div>
-
-          <div class="asset-metrics-deck">
-            <div class="deck-item">
-              <span class="deck-label">سود / زیان خالص</span>
-              <span class="deck-value num good" id="tradfi-pnl">+0.00 $</span>
-              <span class="deck-badge num good" id="tradfi-pct">+0.0% بازدهی</span>
-            </div>
-            <div class="deck-item">
-              <span class="deck-label">تعداد معاملات</span>
-              <span class="deck-value num" id="tradfi-count">0</span>
-              <span class="deck-sub num" id="tradfi-wl">0 برد / 0 باخت</span>
-            </div>
-            <div class="deck-item">
-              <span class="deck-label">نرخ برد (Win Rate)</span>
-              <span class="deck-value num" id="tradfi-winrate">N/A</span>
-              <span class="deck-sub num" id="tradfi-pf">ضریب سود: N/A</span>
-            </div>
-          </div>
-        </article>
-      </div>
-
-      <!-- Equity Curve Graph Box -->
-      <article class="panel-box chart-panel">
-        <div class="panel-box-header">
-          <div>
-            <h2 class="panel-title">منحنی رشد سرمایه و بازدهی تجمعی (Cumulative Equity Curve)</h2>
-            <span class="panel-subtitle">ترسیم زنده سود و زیان دلاری بر اساس پوزیشن‌های تحقق‌یافته</span>
-          </div>
-          <div class="chart-kpis">
-            <span class="chart-kpi-pill"><small>وین‌ریت کل:</small> <strong id="kpi-winrate" class="num">N/A</strong></span>
-            <span class="chart-kpi-pill"><small>ضریب سود (PF):</small> <strong id="kpi-pf" class="num">N/A</strong></span>
-            <span class="chart-kpi-pill"><small>حداکثر افت (DD):</small> <strong id="kpi-dd" class="num">$0.00</strong></span>
+          <div class="asset-strip-stats">
+            <div><small>سود خالص</small><strong class="num" id="crypto-pnl">+0.00 $</strong></div>
+            <div><small>بازدهی</small><strong class="num" id="crypto-pct">0.0%</strong></div>
+            <div><small>معاملات</small><strong class="num" id="crypto-count">0</strong></div>
+            <div><small>برد/باخت</small><strong class="num" id="crypto-wl">0 / 0</strong></div>
+            <div><small>وین‌ریت</small><strong class="num" id="crypto-winrate">N/A</strong></div>
+            <div><small>PF</small><strong class="num" id="crypto-pf">N/A</strong></div>
           </div>
         </div>
 
-        <div class="chart-viewport">
-          <svg id="equity-svg" viewBox="0 0 800 220" preserveAspectRatio="none">
+        <div class="asset-strip-item tradfi-accent">
+          <div class="asset-strip-head">
+            <span class="asset-tag-pill tradfi">TRADFI (FX / GOLD / OIL)</span>
+            <span class="asset-sub">EURUSD / XAUUSD / UKBRENT</span>
+          </div>
+          <div class="asset-strip-stats">
+            <div><small>سود خالص</small><strong class="num" id="tradfi-pnl">+0.00 $</strong></div>
+            <div><small>بازدهی</small><strong class="num" id="tradfi-pct">0.0%</strong></div>
+            <div><small>معاملات</small><strong class="num" id="tradfi-count">0</strong></div>
+            <div><small>برد/باخت</small><strong class="num" id="tradfi-wl">0 / 0</strong></div>
+            <div><small>وین‌ریت</small><strong class="num" id="tradfi-winrate">N/A</strong></div>
+            <div><small>PF</small><strong class="num" id="tradfi-pf">N/A</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Interactive Equity Curve -->
+      <article class="panel-box chart-panel">
+        <div class="panel-box-header">
+          <div>
+            <h2 class="panel-title">منحنی رشد سرمایه (Cumulative PnL)</h2>
+          </div>
+          <div class="chart-kpis">
+            <span class="chart-kpi-pill"><small>وین‌ریت:</small> <strong id="kpi-winrate" class="num">N/A</strong></span>
+            <span class="chart-kpi-pill"><small>PF:</small> <strong id="kpi-pf" class="num">N/A</strong></span>
+            <span class="chart-kpi-pill"><small>Sharpe:</small> <strong id="kpi-sharpe" class="num">N/A</strong></span>
+            <span class="chart-kpi-pill"><small>Expectancy:</small> <strong id="kpi-exp" class="num">$0.00</strong></span>
+            <span class="chart-kpi-pill"><small>Max DD:</small> <strong id="kpi-dd" class="num">$0.00</strong></span>
+          </div>
+        </div>
+
+        <div class="chart-viewport" id="equity-chart-wrap">
+          <svg id="equity-svg" viewBox="0 0 860 220" preserveAspectRatio="none">
             <defs>
               <linearGradient id="equity-grad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.22"/>
                 <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
               </linearGradient>
             </defs>
-            <path id="equity-area" fill="url(#equity-grad)" d="M0,200 L800,200 Z" />
-            <path id="equity-line" fill="none" stroke="#10b981" stroke-width="2" d="M0,200 L800,200" />
+            <g id="chart-grid"></g>
             <g id="chart-zero-line"></g>
+            <path id="equity-area" fill="url(#equity-grad)" d="" />
+            <path id="equity-line" fill="none" stroke="#10b981" stroke-width="2" d="" />
             <g id="chart-labels"></g>
+            <g id="chart-dots"></g>
+            <line id="chart-crosshair-x" class="crosshair-line" x1="0" y1="0" x2="0" y2="200" hidden />
           </svg>
+          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
           <div id="chart-empty-msg" class="empty-state">هنوز معامله بسته‌شده‌ای برای ترسیم نمودار ثبت نشده است.</div>
         </div>
       </article>
 
-      <!-- Trading Grids: Open Positions & Closed Trades -->
+      <!-- Unified Watchlist Pipeline & Decision Audit Matrix -->
+      <article class="panel-box" id="non-entry-card">
+        <div class="panel-box-header">
+          <div>
+            <h2 class="panel-title">ماتریس پایپ‌لاین و شفافیت ورود / عدم ورود نمادها</h2>
+            <span class="panel-subtitle">وضعیت مرحله‌به‌مرحله فیلترها، زمان کندل تحلیل‌شده، تازگی دیتا و دلیل دقیق ورود یا وتو</span>
+          </div>
+          <span class="badge" id="rejections-count-badge">0 وتو</span>
+        </div>
+        <div id="rejections-banner" class="alert-box alert-warning" hidden></div>
+        <div id="pipeline-audit-table" class="table-container"></div>
+      </article>
+
+      <!-- Positions & Closed Trades -->
       <div class="grid-dual-columns">
-        <!-- Live Open Positions -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
               <h2 class="panel-title">پوزیشن‌های باز لحظه‌ای</h2>
-              <span class="panel-subtitle">معاملات فعال در حساب متاتریدر ۵</span>
             </div>
             <span id="pos-count-badge" class="badge">0 باز</span>
           </div>
           <div id="positions" class="table-container"></div>
         </article>
 
-        <!-- Closed Trades Log with Asset Filtering -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
-              <h2 class="panel-title">تاریخچه معاملات اخیر</h2>
-              <span class="panel-subtitle">گزارش معاملات بسته‌شده با تفکیک بازار</span>
+              <h2 class="panel-title">تاریخچه معاملات و دلیل ورود</h2>
             </div>
             <div class="filter-btn-group" role="tablist" aria-label="فیلتر کلاس دارایی">
               <button type="button" class="trade-tab-btn active" id="filter-all-btn" data-filter="all">همه (<span id="count-all">0</span>)</button>
-              <button type="button" class="trade-tab-btn" id="filter-crypto-btn" data-filter="crypto">کریپتو ₿ (<span id="count-crypto">0</span>)</button>
+              <button type="button" class="trade-tab-btn" id="filter-crypto-btn" data-filter="crypto">کریپتو (<span id="count-crypto">0</span>)</button>
               <button type="button" class="trade-tab-btn" id="filter-tradfi-btn" data-filter="tradfi">فارکس و طلا (<span id="count-tradfi">0</span>)</button>
             </div>
           </div>
@@ -245,97 +218,83 @@
         </article>
       </div>
 
-      <!-- Live Market Analysis & Theses -->
+      <!-- Post-Trade Loss Analysis & Adaptive Learning -->
       <article class="panel-box">
         <div class="panel-box-header">
           <div>
-            <h2 class="panel-title">سوگیری و تحلیل لحظه‌ای نمادها (Market Regimes & Biases)</h2>
-            <span class="panel-subtitle">تحلیل پیوسته روندهای M15/H1 و شناسایی الگوهای با احتمال برد بالا</span>
+            <h2 class="panel-title">کالبدشکافی ضررها و یادگیری تطبیقی ربات (Loss Post-Mortem)</h2>
+            <span class="panel-subtitle">تحلیل خودکار علت زیان در معاملات بسته‌شده و تنظیم پارامترها برای تکرار نشدن اشتباه</span>
           </div>
+          <span id="loss-audit-badge" class="badge">0 بررسی</span>
         </div>
-        <div id="theses" class="theses-deck"></div>
-      </article>
-
-      <!-- Non-Entry Audit & Defensive Risk Filter Transparency -->
-      <article class="panel-box" id="non-entry-card">
-        <div class="panel-box-header">
-          <div>
-            <h2 class="panel-title">شفافیت عدم ورود و فیلترهای محافظتی (Non-Entry & Veto Audit)</h2>
-            <span class="panel-subtitle">علت توقف موقت معاملات در هر نماد (پرهیز از تله‌های اسلیپیج و رول‌اور)</span>
-          </div>
-          <span class="badge" id="rejections-count-badge">0 وتو</span>
-        </div>
-        <div id="rejections-banner" class="alert-box alert-warning" hidden></div>
-        <div class="filter-audit-deck" id="filter-reasons-grid"></div>
+        <div id="loss-audits-view" class="table-container"></div>
       </article>
     </section>
 
     <!-- TAB 2: SYSTEM & STRATEGY SETTINGS -->
     <section id="settings" class="tab-pane" hidden>
       <div class="grid-dual-columns">
-        <!-- Quant Strategy & Risk Controls -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
               <h2 class="panel-title">مدیریت ریسک و پارامترهای استراتژی</h2>
-              <span class="panel-subtitle">پیکربندی سبک معاملاتی، سشن‌ها و محاسبات سایز پوزیشن</span>
             </div>
             <span class="badge">Real Demo</span>
           </div>
 
           <form id="strategy-settings" autocomplete="off" class="form-flow">
             <div class="form-field">
-              <label for="cfg-engine">موتور تصمیم‌گیری و اجرا</label>
+              <label for="cfg-engine">موتور تصمیم‌گیری</label>
               <select id="cfg-engine" name="engine" class="form-select">
-                <option value="quant">کوانت محض (ریاضیاتی ۱۰۰٪: بدون نیاز به کلید هوش مصنوعی)</option>
-                <option value="hybrid">هیبرید هوشمند (کوانت + اعتبارسنجی Gemini Decision 1)</option>
+                <option value="quant">کوانت محض (ریاضیاتی ۱۰۰٪: بدون نیاز به AI)</option>
+                <option value="hybrid">هیبرید هوشمند (کوانت + تاییدیه Gemini Decision 1)</option>
               </select>
             </div>
 
             <div class="form-field">
-              <label for="cfg-tf-mode">سبک و افق زمانی معاملات (Trading Style)</label>
+              <label for="cfg-tf-mode">تایم‌فریم معاملاتی</label>
               <select id="cfg-tf-mode" name="timeframe_mode" class="form-select">
-                <option value="scalp_m5">اسکلپ سریع M5 (روند M15 + ورود M5: حد ضرر کوچک، معاملات چابک)</option>
-                <option value="standard_m15">اینترادی کلاسیک M15 (روند H1 + ورود M15: ستاپ‌های تثبیت‌شده)</option>
+                <option value="scalp_m5">اسکلپ M5 (روند M15 + ورود M5)</option>
+                <option value="standard_m15">اینترادی M15 (روند H1 + ورود M15)</option>
               </select>
             </div>
 
             <div class="form-field">
-              <label for="cfg-exec-type">نوع سفارش‌گذاری ورود</label>
+              <label for="cfg-exec-type">نوع سفارش</label>
               <select id="cfg-exec-type" name="execution_type" class="form-select">
-                <option value="market">ورود آنی در مارکت (Market Order)</option>
-                <option value="limit">سفارش لیمیت در پولبک (Limit Order: کاهش اسپرد)</option>
+                <option value="market">ورود آنی (Market Order)</option>
+                <option value="limit">سفارش پولبک (Limit Order)</option>
               </select>
             </div>
 
             <div class="form-toggle-tile">
               <div class="tile-meta">
-                <label for="cfg-use-mw" class="tile-title">پایش خودکار Market Watch متاتریدر</label>
-                <span class="tile-desc">خوانش مستقیم نمادهای فعال در پنجره دیدبان متاتریدر ۵ بدون نیاز به تغییر کد</span>
+                <label for="cfg-use-mw" class="tile-title">پایش مستقیم Market Watch متاتریدر</label>
+                <span class="tile-desc">خوانش خودکار نمادهای فعال در پنجره دیدبان متاتریدر ۵</span>
               </div>
               <input type="checkbox" id="cfg-use-mw" name="use_market_watch" class="form-checkbox" checked>
             </div>
 
             <div class="form-toggle-tile">
               <div class="tile-meta">
-                <label for="cfg-vol-filter" class="tile-title">فیلتر حجم معاملات نهادی (Volume Filter)</label>
-                <span class="tile-desc">صدور مجوز ورود تنها در کندل‌هایی با حجم بالاتر از میانگین ۲۰ کندل گذشته</span>
+                <label for="cfg-vol-filter" class="tile-title">فیلتر حجم (Volume Filter)</label>
+                <span class="tile-desc">تایید حجم بالاتر از میانگین ۲۰ کندل گذشته</span>
               </div>
               <input type="checkbox" id="cfg-vol-filter" name="volume_filter" class="form-checkbox" checked>
             </div>
 
             <div class="form-toggle-tile">
               <div class="tile-meta">
-                <label for="cfg-session-filter" class="tile-title">فیلتر سشن‌های لندن و نیویورک</label>
-                <span class="tile-desc">محدود کردن سفارش‌گذاری به بازارهای پرنقدینگی و قفل پوزیشن در رول‌اور</span>
+                <label for="cfg-session-filter" class="tile-title">فیلتر سشن‌های لندن و نیویورک (فقط TradFi)</label>
+                <span class="tile-desc">محدود کردن فارکس به ساعات پرنقدینگی (کریپتو همیشه ۲۴/۷ آزاد است)</span>
               </div>
               <input type="checkbox" id="cfg-session-filter" name="session_filter" class="form-checkbox">
             </div>
 
             <div class="form-toggle-tile">
               <div class="tile-meta">
-                <label for="cfg-order-book" class="tile-title">فیلتر عدم تقارن دفتر سفارشات (Order Book Imbalance)</label>
-                <span class="tile-desc">بررسی برتری صف خریداران بر فروشندگان در عمق بازار پیش از ورود</span>
+                <label for="cfg-order-book" class="tile-title">فیلتر عمق دفتر سفارشات (Order Book)</label>
+                <span class="tile-desc">بررسی برتری صف خریداران یا فروشندگان پیش از ورود</span>
               </div>
               <input type="checkbox" id="cfg-order-book" name="check_order_book" class="form-checkbox" checked>
             </div>
@@ -346,12 +305,10 @@
           </form>
         </article>
 
-        <!-- Decision AI Configuration Panel -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
               <h2 class="panel-title">هوش مصنوعی تصمیم‌گیر (Decision AI)</h2>
-              <span class="panel-subtitle">Google Gemini Decision 1 / Zero Output Tokens</span>
             </div>
             <span id="decision-ai-badge" class="badge">فعال</span>
           </div>
@@ -365,7 +322,7 @@
             <div class="form-toggle-tile">
               <div class="tile-meta">
                 <label for="cfg-ai-enabled" class="tile-title">فعال‌سازی هوش مصنوعی تصمیم‌گیر</label>
-                <span class="tile-desc">در صورت غیرفعال بودن، ربات به شکل مستقل با منطق کوانت کار خواهد کرد</span>
+                <span class="tile-desc">در حالت غیرفعال، ربات ۱۰۰٪ با منطق کوانت کار می‌کند</span>
               </div>
               <input type="checkbox" id="cfg-ai-enabled" name="decision_ai_enabled" class="form-checkbox" checked>
             </div>
@@ -373,24 +330,24 @@
             <div class="form-field">
               <label for="cfg-ai-model">مدل هوش مصنوعی</label>
               <select id="cfg-ai-model" name="decision_ai_model" class="form-select">
-                <option value="gemini-decision-1">Google DeepMind Gemini Decision 1 (توصیه‌شده)</option>
-                <option value="gemini-flash-lite-latest">Google Gemini Flash Lite (نسخه جایگزین)</option>
+                <option value="gemini-decision-1">Google DeepMind Gemini Decision 1</option>
+                <option value="gemini-flash-lite-latest">Google Gemini Flash Lite</option>
               </select>
             </div>
 
             <div class="form-field">
-              <label for="cfg-ai-confidence">حداقل اطمینان هوش مصنوعی برای ورود (Confidence %)</label>
+              <label for="cfg-ai-confidence">حداقل اطمینان تایید (Confidence %)</label>
               <input type="number" id="cfg-ai-confidence" name="decision_ai_confidence" class="form-input" min="50" max="95" value="60">
             </div>
 
             <div class="form-field">
-              <label for="cfg-api-key">کلید دسترسی گوگل (Google AI Studio Key)</label>
-              <input id="cfg-api-key" name="api_key" dir="ltr" type="password" class="form-input" placeholder="AQ.Ab8RN... (خالی بگذارید تا کلید فعلی حفظ شود)">
+              <label for="cfg-api-key">کلید دسترسی گوگل (AI Studio Key)</label>
+              <input id="cfg-api-key" name="api_key" dir="ltr" type="password" class="form-input" placeholder="AQ.Ab8RN... (خالی بگذارید تا حفظ شود)">
             </div>
 
             <div class="form-actions">
               <button type="button" class="btn btn-primary" id="save-ai-btn">ذخیره تنظیمات AI</button>
-              <button type="button" class="btn btn-secondary" id="test-ai">تست اتصال Decision AI</button>
+              <button type="button" class="btn btn-secondary" id="test-ai">تست اتصال AI</button>
             </div>
             <pre id="ai-test-result" class="console-output" dir="ltr">آماده تست ارتباط با سرور گوگل.</pre>
           </form>
@@ -401,12 +358,10 @@
     <!-- TAB 3: BACKTEST & SELF-TRAINING -->
     <section id="backtest" class="tab-pane" hidden>
       <div class="grid-dual-columns">
-        <!-- Backtest Input Form -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
-              <h2 class="panel-title">شبیه‌ساز تاریخی و خودآموزی (Walk-Forward Simulator)</h2>
-              <span class="panel-subtitle">تست گام‌به‌گام استراتژی بر روی دیتای گذشته بدون نگاه به آینده</span>
+              <h2 class="panel-title">شبیه‌ساز تاریخی و خودآموزی (Walk-Forward)</h2>
             </div>
             <span class="badge">Backtester</span>
           </div>
@@ -414,24 +369,21 @@
           <form id="backtest-form" class="form-flow">
             <div class="grid-form-split">
               <div class="form-field">
-                <label for="bt-symbol">نماد معاملاتی (از واچ‌لیست متاتریدر)</label>
+                <label for="bt-symbol">نماد معاملاتی (از واچ‌لیست)</label>
                 <select id="bt-symbol" class="form-select">
-                  <option value="EURUSD">EURUSD (یورو به دلار)</option>
-                  <option value="XAUUSD">XAUUSD (انس طلا)</option>
-                  <option value="UKBRENT.F27">UKBRENT.F27 (نفت خام برنت)</option>
-                  <option value="US30CASH">US30CASH (شاخص داوجونز)</option>
-                  <option value="GBPUSD">GBPUSD (پوند به دلار)</option>
-                  <option value="USDJPY">USDJPY (دلار به ین)</option>
+                  <option value="EURUSD">EURUSD</option>
+                  <option value="XAUUSD">XAUUSD</option>
+                  <option value="BTCUSD">BTCUSD</option>
                 </select>
               </div>
 
               <div class="form-field">
                 <label for="bt-count">تعداد کندل‌های M15</label>
                 <select id="bt-count" class="form-select">
-                  <option value="500">۵۰۰ کندل (~۵ روز کاری)</option>
-                  <option value="1000">۱,۰۰۰ کندل (~۱۰ روز کاری)</option>
-                  <option value="2000" selected>۲,۰۰۰ کندل (~۲۰ روز کاری)</option>
-                  <option value="3000">۳,۰۰۰ کندل (~۱ ماه کاری)</option>
+                  <option value="500">۵۰۰ کندل (~۵ روز)</option>
+                  <option value="1000">۱,۰۰۰ کندل (~۱۰ روز)</option>
+                  <option value="2000" selected>۲,۰۰۰ کندل (~۲۰ روز)</option>
+                  <option value="3000">۳,۰۰۰ کندل (~۱ ماه)</option>
                 </select>
               </div>
             </div>
@@ -443,46 +395,32 @@
 
             <div class="form-actions">
               <button type="button" class="btn btn-primary" id="run-backtest-btn">اجرای بک‌تست تاریخی</button>
-              <button type="button" class="btn btn-accent" id="run-train-btn">شروع یادگیری و بهینه‌سازی پارامترها</button>
+              <button type="button" class="btn btn-accent" id="run-train-btn">شروع یادگیری و بهینه‌سازی</button>
             </div>
-            <p class="field-hint">در روزهای تعطیل مارکت، فرایند بهینه‌سازی پارامترها را تنظیم کرده و درس‌های آموخته‌شده را در پایگاه داده ثبت می‌کند.</p>
           </form>
         </article>
 
-        <!-- Backtest Results Visualizer -->
         <article class="panel-box">
           <div class="panel-box-header">
             <div>
-              <h2 class="panel-title">نتایج و بازدهی شبیه‌سازی</h2>
+              <h2 class="panel-title">نتایج شبیه‌سازی</h2>
               <span class="panel-subtitle" id="bt-summary-title">هنوز بک‌تستی اجرا نشده است.</span>
             </div>
             <span id="bt-pf-badge" class="badge">N/A</span>
           </div>
 
           <div class="kpi-ribbon mini-ribbon">
-            <div class="kpi-cell">
-              <span class="kpi-label">بالانس نهایی</span>
-              <div class="kpi-val num" id="bt-final-bal">N/A</div>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">سود خالص</span>
-              <div class="kpi-val num" id="bt-net-pnl">N/A</div>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">وین‌ریت</span>
-              <div class="kpi-val num" id="bt-winrate">N/A</div>
-            </div>
-            <div class="kpi-cell">
-              <span class="kpi-label">تعداد معاملات</span>
-              <div class="kpi-val num" id="bt-trades-count">N/A</div>
-            </div>
+            <div class="kpi-cell"><span class="kpi-label">بالانس نهایی</span><div class="kpi-val num" id="bt-final-bal">N/A</div></div>
+            <div class="kpi-cell"><span class="kpi-label">سود خالص</span><div class="kpi-val num" id="bt-net-pnl">N/A</div></div>
+            <div class="kpi-cell"><span class="kpi-label">وین‌ریت</span><div class="kpi-val num" id="bt-winrate">N/A</div></div>
+            <div class="kpi-cell"><span class="kpi-label">معاملات</span><div class="kpi-val num" id="bt-trades-count">N/A</div></div>
           </div>
 
           <div class="chart-viewport chart-viewport-mini">
             <svg id="bt-equity-svg" viewBox="0 0 600 160" preserveAspectRatio="none">
               <defs>
                 <linearGradient id="bt-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25"/>
+                  <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.22"/>
                   <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.0"/>
                 </linearGradient>
               </defs>
@@ -491,16 +429,14 @@
             </svg>
           </div>
 
-          <!-- Lessons Learned Deck -->
           <div id="bt-lessons-box" class="lessons-container" hidden>
-            <h3 class="sub-heading">درس‌های آموخته‌شده هوش مصنوعی (Self-Trained Lessons):</h3>
+            <h3 class="sub-heading">درس‌های آموخته‌شده:</h3>
             <ul id="bt-lessons-list" class="lessons-deck"></ul>
           </div>
 
-          <!-- Backtest Trades Table -->
           <div id="bt-trades-card" class="bt-trades-section" hidden>
             <div class="panel-box-header">
-              <h3 class="sub-heading">ریز معاملات انجام‌شده در بک‌تست (Trade Audit)</h3>
+              <h3 class="sub-heading">ریز معاملات بک‌تست</h3>
               <span id="bt-trades-badge" class="badge">0 معامله</span>
             </div>
             <div id="bt-trades-view" class="table-container bt-table-scroll"></div>
@@ -515,18 +451,17 @@
         <div class="panel-box-header">
           <div>
             <h2 class="panel-title">کنسول لاگ زنده و خروجی تریدر</h2>
-            <span class="panel-subtitle">پایش بی‌درنگ رویدادها، خطاهای شبکه و فرآیند تریدینگ</span>
           </div>
           <div class="console-actions">
             <span id="log-state" class="badge status-active">فعال</span>
             <select id="log-filter" class="form-select form-select-sm" aria-label="فیلتر سطح لاگ">
               <option value="all">همه لاگ‌ها</option>
-              <option value="INFO">سطح INFO</option>
-              <option value="WARN">هشدارها (WARN)</option>
-              <option value="ERROR">فقط خطاها (ERROR)</option>
+              <option value="INFO">INFO</option>
+              <option value="WARN">WARN</option>
+              <option value="ERROR">ERROR</option>
             </select>
             <button type="button" id="log-copy" class="btn btn-sm">کپی لاگ</button>
-            <button type="button" id="log-clear" class="btn btn-sm">پاک کردن نما</button>
+            <button type="button" id="log-clear" class="btn btn-sm">پاک کردن</button>
           </div>
         </div>
         <pre id="process-logs" class="terminal-screen" dir="ltr">در حال اتصال به پایپ لاگ تریدر...</pre>
@@ -534,40 +469,23 @@
 
       <div class="grid-dual-columns">
         <article class="panel-box">
-          <div class="panel-box-header">
-            <div>
-              <h2 class="panel-title">درخواست‌ها و ارزیابی‌های Decision AI</h2>
-              <span class="panel-subtitle">گزارش تصمیمات ورودی/خروجی هوش مصنوعی</span>
-            </div>
-          </div>
+          <div class="panel-box-header"><h2 class="panel-title">درخواست‌های Decision AI</h2></div>
           <div id="ai-requests" class="table-container"></div>
         </article>
-
         <article class="panel-box">
-          <div class="panel-box-header">
-            <div>
-              <h2 class="panel-title">تصمیمات و اعتبارسنجی‌ها</h2>
-              <span class="panel-subtitle">ثبت وقایع تایید یا رد ستاپ‌های معاملاتی</span>
-            </div>
-          </div>
+          <div class="panel-box-header"><h2 class="panel-title">تصمیمات ثبت‌شده</h2></div>
           <div id="decisions" class="table-container"></div>
         </article>
       </div>
 
-      <article class="panel-box" style="margin-top: 16px;">
-        <div class="panel-box-header">
-          <div>
-            <h2 class="panel-title">سلامت و عیب‌یابی سیستم (System Diagnostics)</h2>
-            <span class="panel-subtitle">وضعیت مدل‌های AI، پوزیشن‌های ریکاوری‌شده و بافر حافظه</span>
-          </div>
-        </div>
+      <article class="panel-box" style="margin-top: 14px;">
+        <div class="panel-box-header"><h2 class="panel-title">سلامت و عیب‌یابی سیستم (Diagnostics)</h2></div>
         <div id="diagnostics" class="table-container"></div>
       </article>
     </section>
 
-    <!-- Workstation Footer -->
     <footer class="workstation-footer">
-      <span>AI TRADER PRO WORKSTATION · NATIVE METATRADER 5 & GEMINI DECISION 1 · QUANT ENGINE</span>
+      <span>AI TRADER PRO · MT5 QUANT & DECISION AI WORKSTATION</span>
       <span id="last-update" class="num">آخرین به‌روزرسانی: N/A</span>
     </footer>
   </main>

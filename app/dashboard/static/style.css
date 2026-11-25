@@ -1183,3 +1183,195 @@ details p {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   Compact Asset Comparison Strip (Crypto vs TradFi)
+   ========================================================================== */
+.asset-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.asset-strip-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 14px;
+}
+
+.asset-strip-item.crypto-accent {
+  border-right: 3px solid var(--crypto);
+}
+
+.asset-strip-item.tradfi-accent {
+  border-right: 3px solid var(--tradfi);
+}
+
+.asset-strip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.asset-tag-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+
+.asset-tag-pill.crypto {
+  background: var(--crypto-soft);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.asset-tag-pill.tradfi {
+  background: var(--tradfi-soft);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.asset-sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.asset-strip-stats {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.asset-strip-stats > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.asset-strip-stats small {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.asset-strip-stats strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.asset-strip-stats strong.good { color: var(--good); }
+.asset-strip-stats strong.bad { color: var(--bad); }
+
+/* ==========================================================================
+   Interactive Equity Chart Crosshair & Tooltip
+   ========================================================================== */
+.crosshair-line {
+  stroke: rgba(148, 163, 184, 0.45);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  background: rgba(15, 20, 29, 0.95);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 20;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   Pipeline Matrix & Stage Pills
+   ========================================================================== */
+.stage-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.stage-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.stage-pill.pass {
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.stage-pill.fail {
+  color: #fb7185;
+  border-color: rgba(244, 63, 94, 0.35);
+  background: rgba(244, 63, 94, 0.08);
+}
+
+.stage-pill.wait {
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.freshness-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-top: 3px;
+}
+
+.freshness-pill.fresh {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.freshness-pill.stale {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.freshness-pill.closed {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.reason-cell {
+  white-space: normal;
+  min-width: 240px;
+  max-width: 420px;
+  font-family: system-ui, -apple-system, sans-serif !important;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.loss-reason-note {
+  display: block;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 10.5px;
+  color: #fda4af;
+  margin-top: 2px;
+}
+
+@media (max-width: 1100px) {
+  .asset-strip { grid-template-columns: 1fr; }
+  .asset-strip-stats { grid-template-columns: repeat(3, 1fr); }
+}

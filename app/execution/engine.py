@@ -116,10 +116,11 @@ class ExecutionEngine:
                 "pnl": round(pnl, 2), "r_mult": r_mult}
 
     def check_sl_tp(self):
-        """Check open positions against live ticks (SL/TP hit detection)."""
+        """Check open positions against live ticks (SL/TP hit detection). Returns closed trade IDs."""
+        closed_ids = []
         open_pos = self.repo.open_positions()
         if not open_pos:
-            return
+            return closed_ids
         for pos in open_pos:
             tick = self.feed.get_tick(pos["symbol"])
             if tick is None:
@@ -140,4 +141,7 @@ class ExecutionEngine:
                     hit_reason = "take_profit_hit"
             if hit_reason:
                 log.info(f"SL/TP HIT: {pos['ticket']} {hit_reason}")
-                self.close_position(pos["ticket"], reason=hit_reason)
+                res = self.close_position(pos["ticket"], reason=hit_reason)
+                if res and res.get("trade_id"):
+                    closed_ids.append(res["trade_id"])
+        return closed_ids

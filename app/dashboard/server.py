@@ -277,11 +277,13 @@ def api_symbols():
 
 @dashboard.route("/api/trades")
 def api_trades():
-    """Recent closed trades with asset class classification."""
+    """Recent trades with asset class classification and post-mortem review."""
     repo = _get_repo()
     from app.journal.performance import get_asset_class
     rows = repo.conn.execute(
-        "SELECT * FROM trades ORDER BY opened_ts DESC LIMIT 50").fetchall()
+        "SELECT t.*, r.classification AS review_class, r.review AS review_text "
+        "FROM trades t LEFT JOIN trade_reviews r ON t.trade_id = r.trade_id "
+        "ORDER BY t.opened_ts DESC LIMIT 50").fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -292,10 +294,30 @@ def api_trades():
 
 @dashboard.route("/api/performance")
 def api_performance():
-    """Performance metrics."""
+    """Performance metrics, loss post-mortems, and learned profiles."""
     repo = _get_repo()
     tracker = PerformanceTracker(repo)
     sum_data = tracker.summary()
+
+    # Recent loss reviews
+    loss_rows = repo.conn.execute(
+        "SELECT t.trade_id, t.symbol, t.direction, t.profit_loss, t.exit_ts, t.setup, "
+        "r.classification, r.review FROM trades t "
+        "LEFT JOIN trade_reviews r ON t.trade_id = r.trade_id "
+        "WHERE t.status='closed' AND t.profit_loss < 0 "
+        "ORDER BY t.exit_ts DESC LIMIT 10"
+    ).fetchall()
+    loss_audits = [dict(r) for r in loss_rows]
+
+    learned = {}
+    try:
+        from pathlib import Path
+        lp = Path("data/learned_profiles.json")
+        if lp.exists():
+            learned = json.loads(lp.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
     return jsonify({
         "summary": sum_data,
         "by_symbol": tracker.breakdown_by("symbol"),
@@ -304,35 +326,97 @@ def api_performance():
         "by_asset_class": sum_data.get("by_asset_class", {}),
         "daily": tracker.daily_breakdown(),
         "reviews": tracker.review_summary(),
+        "loss_audits": loss_audits,
+        "learned_profiles": learned,
     })
 
 
 @dashboard.route("/api/thesis")
 def api_thesis():
-    """Latest thesis per symbol."""
+    """Latest thesis & pipeline audit per active symbol (including Crypto & Market Watch)."""
     repo = _get_repo()
-    from app.config.config_loader import load_symbols
+    from app.config.config_loader import load_symbols, load_settings
+    from app.risk.engine import is_crypto_symbol, is_market_open
     sym_cfg = load_symbols()
-    symbols = [s for s, v in sym_cfg["symbols"].items() if v.get("enabled", True)]
+    cfg_symbols = [s for s, v in sym_cfg["symbols"].items() if v.get("enabled", True)]
+    settings = load_settings()
+
+    mw_symbols = []
+    if not current_app.config.get("TESTING") and is_mt5_running():
+        try:
+            import MetaTrader5 as mt5
+            if mt5.terminal_info() is not None or mt5.initialize(timeout=1000):
+                symbols_info = mt5.symbols_get()
+                if symbols_info:
+                    mw_symbols = [s.name for s in symbols_info if s.visible]
+        except Exception:
+            pass
+
+    # Merge config/MW symbols with any symbols recently recorded in market_thesis
+    db_syms = [r["symbol"] for r in repo.conn.execute(
+        "SELECT DISTINCT symbol FROM market_thesis ORDER BY id DESC LIMIT 30").fetchall()]
+
+    symbols = []
+    base_list = mw_symbols if (mw_symbols and settings.get("trading", {}).get("use_market_watch")) else cfg_symbols
+    for s in list(base_list) + list(cfg_symbols) + list(db_syms):
+        if s and s not in symbols:
+            symbols.append(s)
+
     result = {}
     for sym in symbols:
         t = repo.latest_thesis(sym)
+        crypto = is_crypto_symbol(sym)
+        mkt_open = is_market_open(sym)
         if t:
+            payload = {}
+            try:
+                payload = json.loads(t.get("payload") or "{}")
+            except Exception:
+                payload = {}
             p_info = _format_thesis_persian(t["bias"], t["regime"], t["thesis"])
+            persian_desc = payload.get("persian_reason") or p_info["desc"]
+            cat = p_info["category"]
+            if t["bias"] in ("BUY", "SELL"):
+                cat = f"ورود فعال ({t['bias']})"
+            elif t["bias"] == "MARKET_CLOSED" or not mkt_open:
+                cat = "بازار بسته (تعطیلات)"
+                if not mkt_open and "تعطیلات" not in persian_desc:
+                    persian_desc = "بازار در تعطیلات آخر هفته بسته است؛ در حال حاضر فقط رمز ارزها (۲۴/۷) پایش می‌شوند."
             result[sym] = {
                 "bias": t["bias"],
                 "regime": t["regime"],
                 "thesis": t["thesis"],
                 "invalidation": t["invalidation"],
                 "ts": t["ts"],
-                "persian_desc": p_info["desc"],
-                "persian_category": p_info["category"],
+                "candle_time": payload.get("candle_time", ""),
+                "analyzed_at": payload.get("analyzed_at", t["ts"]),
+                "entry_tf": payload.get("entry_tf", ""),
+                "trend_tf": payload.get("trend_tf", ""),
+                "pipeline_stages": payload.get("pipeline_stages", []),
+                "market_context": payload.get("market_context", {}),
+                "is_crypto": crypto,
+                "market_open": mkt_open,
+                "persian_desc": persian_desc,
+                "persian_category": cat,
             }
         else:
-            result[sym] = {"bias": "NO_DATA", "regime": "UNKNOWN",
-                           "thesis": "No analysis yet", "ts": None,
-                           "persian_desc": "هنوز تحلیلی برای این نماد ثبت نشده است",
-                           "persian_category": "بدون دیتا"}
+            result[sym] = {
+                "bias": "NO_DATA",
+                "regime": "UNKNOWN" if mkt_open else "MARKET_CLOSED",
+                "thesis": "No analysis yet",
+                "ts": None,
+                "candle_time": "",
+                "analyzed_at": None,
+                "pipeline_stages": [
+                    {"key": "market", "label": "بازار", "status": "pass" if mkt_open else "fail",
+                     "detail": "24/7" if crypto else ("باز" if mkt_open else "تعطیلات")}
+                ],
+                "market_context": {},
+                "is_crypto": crypto,
+                "market_open": mkt_open,
+                "persian_desc": "بازار در تعطیلات بسته است (فقط کریپتو فعال است)." if not mkt_open else "هنوز تحلیلی برای این نماد ثبت نشده است (منتظر تیک بعدی ربات).",
+                "persian_category": "بازار بسته" if not mkt_open else "بدون دیتا",
+            }
     return jsonify(result)
 
 

@@ -42,6 +42,7 @@ class Agent:
         self.running = False
         self._watch_queue = {}  # symbol -> next_check_timestamp
         self._normal_queue = {}
+        self._closed_market_noted = {}
         engine_cfg = self.settings.get("trading", {}).get("engine")
         self.engine_mode = engine_cfg if engine_cfg else ("ai" if self.ai else "quant")
         from app.strategy.quant_engine import QuantEngine
@@ -84,7 +85,9 @@ class Agent:
             return
 
         # --- SL/TP hit check first ---
-        self.execution.check_sl_tp()
+        closed_ids = self.execution.check_sl_tp() or []
+        for tid in closed_ids:
+            self._post_mortem_loss(tid)
 
         now = time.time()
 
@@ -99,8 +102,29 @@ class Agent:
 
         open_positions = self.repo.open_positions()
         open_symbols = {p["symbol"] for p in open_positions}
+        from app.risk.engine import is_market_open
+        from datetime import datetime, timezone
 
         for sym in self.symbols:
+            # --- weekend / market-closed filter (only Crypto 24/7 on weekends) ---
+            if not is_market_open(sym) and sym not in open_symbols:
+                if now - self._closed_market_noted.get(sym, 0) > 1800:
+                    self._closed_market_noted[sym] = now
+                    closed_payload = {
+                        "symbol": sym,
+                        "decision": "WAIT",
+                        "market_regime": "MARKET_CLOSED",
+                        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+                        "persian_reason": "بازار در تعطیلات آخر هفته بسته است؛ در حال حاضر فقط رمز ارزها (۲۴/۷) تحلیل می‌شوند.",
+                        "pipeline_stages": [
+                            {"key": "market", "label": "بازار", "status": "fail", "detail": "تعطیلات (بسته)"}
+                        ],
+                    }
+                    self.repo.save_thesis(
+                        sym, "MARKET_CLOSED", "MARKET_CLOSED",
+                        "Market closed (weekend) - only 24/7 crypto scanned",
+                        "N/A", closed_payload)
+                continue
             # --- watch queue ---
             if sym in open_symbols:
                 self._watch_queue.pop(sym, None)
@@ -150,14 +174,19 @@ class Agent:
             # --- Optional Decision AI Gate (Jev-inspired fast classification) ---
             if d in ("BUY", "SELL") and getattr(self, "decision_ai", None) and self.decision_ai.enabled:
                 ai_eval = self.decision_ai.evaluate_setup(decision, decision.get("market_context", {}))
+                stages = decision.setdefault("pipeline_stages", [])
                 if not ai_eval.get("approve", True):
                     log.info(f"{sym} | Decision AI rejected: {ai_eval.get('reason')}")
                     d = "WAIT"
                     decision["decision"] = "WAIT"
-                    decision["thesis"] = f"[Decision AI: {ai_eval.get('reason')}] " + decision.get("thesis", "")
+                    reason_str = ai_eval.get("reason", "تایید نشد")
+                    decision["thesis"] = f"[Decision AI: {reason_str}] " + decision.get("thesis", "")
+                    decision["persian_reason"] = f"ستاپ {decision.get('setup', '')} توسط Decision AI رد شد: {reason_str}"
+                    stages.append({"key": "ai", "label": "Decision AI", "status": "fail", "detail": str(reason_str)[:40]})
                 else:
                     log.info(f"{sym} | Decision AI approved: {ai_eval.get('reason')}")
                     decision["thesis"] += f" | Decision AI: {ai_eval.get('reason')}"
+                    stages.append({"key": "ai", "label": "Decision AI", "status": "pass", "detail": "تایید شد"})
 
             log.info(f"{sym} | state={self.state.value} | decision={d} | "
                      f"confidence={decision.get('confidence')}")
@@ -188,6 +217,15 @@ class Agent:
                 decision["position_size"] = decision.get("position_size") or {}
                 account = self.feed.get_account_info()
                 risk_result = self.risk.validate(decision, account)
+                stages = decision.setdefault("pipeline_stages", [])
+                if risk_result.approved:
+                    stages.append({"key": "risk", "label": "ریسک و اسپرد", "status": "pass",
+                                   "detail": f"{risk_result.calculated_lots} lot ({risk_result.risk_percent}%)"})
+                else:
+                    stages.append({"key": "risk", "label": "ریسک و اسپرد", "status": "fail",
+                                   "detail": "; ".join(risk_result.reasons_reject)[:60]})
+                    decision["persian_reason"] = f"ستاپ {d} آماده شد اما مدیریت ریسک رد کرد: " + "; ".join(risk_result.reasons_reject)
+
                 self.repo.save_decision(
                     request_id=f"decision_{sym}_{int(now)}",
                     symbol=sym, decision=d, approved=risk_result.approved,
@@ -202,6 +240,10 @@ class Agent:
                     decision["risk_percent"] = risk_result.risk_percent
                     res = self.execution.place_order(decision)
                     log.info(f"execution result: {res}")
+                    self.repo.save_thesis(
+                        sym, d, decision.get("market_regime", ""),
+                        decision.get("thesis", ""),
+                        decision.get("invalidation", ""), decision)
                     if res.get("status") in ("EXECUTED_SIMULATED",):
                         self.state = AgentState.POSITION_OPEN
                 else:
@@ -389,6 +431,76 @@ class Agent:
             versions=self.settings.get("versions", {}))
         decision["_recovered_from_truncation"] = True
         return decision
+
+    def _post_mortem_loss(self, trade_id: str):
+        """Deterministic post-trade loss analysis & adaptive parameter learning."""
+        trade = self.repo.get_trade(trade_id)
+        if not trade:
+            return
+        pnl = trade.get("profit_loss")
+        if pnl is None or pnl >= 0:
+            return
+        sym = trade.get("symbol", "")
+        exit_reason = str(trade.get("exit_reason") or "").lower()
+        opened_ts = trade.get("opened_ts") or ""
+        exit_ts = trade.get("exit_ts") or ""
+        duration_min = None
+        try:
+            from datetime import datetime
+            t0 = datetime.fromisoformat(str(opened_ts).replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(str(exit_ts).replace("Z", "+00:00"))
+            duration_min = max(0.0, (t1 - t0).total_seconds() / 60.0)
+        except Exception:
+            pass
+
+        from app.risk.engine import is_crypto_symbol
+        if duration_min is not None and duration_min < 15.0:
+            cls = "SL_TOO_TIGHT"
+            review = (f"پوزیشن {sym} در کمتر از {duration_min:.0f} دقیقه با حد ضرر بسته شد (ضرر {pnl:.2f}$). "
+                      "علت احتمالی: نوسان شدید لحظه‌ای یا فاصله کم حد ضرر نسبت به اسپرد/ATR.")
+        elif is_crypto_symbol(sym) and "stop_loss" in exit_reason:
+            cls = "CRYPTO_VOLATILITY"
+            review = (f"برخورد با حد ضرر در بازار پرنوسان کریپتو ({sym}، ضرر {pnl:.2f}$). "
+                      "توصیه: نیاز به مومنتوم قوی‌تر و تایید کندل پولبک.")
+        elif "stop_loss" in exit_reason:
+            cls = "TREND_REVERSAL"
+            review = (f"بازگشت قیمت برخلاف جهت معامله {trade.get('direction')} در {sym} و فعال شدن حد ضرر ({pnl:.2f}$). "
+                      f"ستاپ ورود: {trade.get('setup') or 'Quant'}.")
+        else:
+            cls = "LOSS_CLOSED"
+            review = f"معامله {sym} با زیان {pnl:.2f}$ بسته شد ({exit_reason or 'بسته شدن دستی/سیستمی'})."
+
+        try:
+            self.repo.save_review(trade_id, cls, review)
+            log.info(f"post-mortem saved for {trade_id}: {cls}")
+        except Exception as exc:
+            log.warning(f"failed saving post-mortem: {exc}")
+
+        # Adaptive learning: if 2+ consecutive losses on this symbol, raise adx_min slightly
+        try:
+            recent = self.repo.conn.execute(
+                "SELECT profit_loss FROM trades WHERE symbol=? AND status='closed' "
+                "ORDER BY exit_ts DESC LIMIT 2", (sym,)).fetchall()
+            if len(recent) == 2 and all((r["profit_loss"] or 0) < 0 for r in recent):
+                from pathlib import Path
+                import json as _json
+                p = Path("data/learned_profiles.json")
+                profiles = {}
+                if p.exists():
+                    profiles = _json.loads(p.read_text(encoding="utf-8"))
+                sym_prof = profiles.setdefault(sym, {"params": {}})
+                curr_adx = float(sym_prof["params"].get("adx_min", 18.0))
+                new_adx = min(25.0, curr_adx + 1.5)
+                if new_adx > curr_adx:
+                    sym_prof["params"]["adx_min"] = new_adx
+                    sym_prof["last_lesson"] = f"افزایش خودکار حداقل ADX به {new_adx:.1f} پس از ۲ زیان متوالی"
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(_json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+                    if hasattr(self, "quant"):
+                        self.quant.learned_profiles = profiles
+                    log.info(f"Adaptive learning: raised {sym} adx_min to {new_adx:.1f}")
+        except Exception as exc:
+            log.warning(f"adaptive learning update skipped: {exc}")
 
     def _review_trade(self, trade_id: str):
         """AI post-trade review."""

@@ -27,11 +27,15 @@ function renderSvgCurve(svgId, areaId, lineId, points, initialBalance = 0) {
   const max = Math.max(...vals);
   const range = (max - min) || 1.0;
 
-  const W = 800, H = 200, padY = 20;
-  const stepX = W / (vals.length - 1);
+  const vb = svg.getAttribute('viewBox') || '0 0 860 220';
+  const vbParts = vb.split(/\s+/).map(Number);
+  const W = vbParts[2] || 800, H = (vbParts[3] || 220) - 20, padY = 20;
+  const padL = svgId === 'equity-svg' ? 52 : 0;
+  const plotW = W - padL - 10;
+  const stepX = plotW / (vals.length - 1);
 
   const coords = vals.map((v, i) => {
-    const x = Math.round(i * stepX);
+    const x = Math.round(padL + i * stepX);
     const y = Math.round(H - padY - ((v - min) / range) * (H - 2 * padY));
     return [x, y];
   });
@@ -41,11 +45,11 @@ function renderSvgCurve(svgId, areaId, lineId, points, initialBalance = 0) {
 
   if (area) {
     const lastX = coords[coords.length - 1][0];
-    const areaD = `${lineD} L${lastX},${H} L0,${H} Z`;
+    const firstX = coords[0][0];
+    const areaD = `${lineD} L${lastX},${H} L${firstX},${H} Z`;
     area.setAttribute('d', areaD);
   }
 
-  // Set line color: jade green if final >= start, else crimson red
   const finalVal = vals[vals.length - 1];
   const startVal = initialBalance > 0 ? initialBalance : vals[0];
   const color = finalVal >= startVal ? '#10b981' : '#f43f5e';
@@ -101,12 +105,14 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const setCls = (id, cls) => { const el = $(id); if (el && cls !== undefined && cls !== null) el.className = cls; };
   let csrf = '', activeTab = 'monitor';
   let consecutiveNetErrors = 0;
+  let cachedEquityPoints = [];
+  let cachedCoords = [];
 
   const titles = {
-    monitor: 'داشبورد معاملات و رشد سرمایه',
+    monitor: 'میز معاملات و پایپ‌لاین تصمیم‌گیری',
     settings: 'پیکربندی استراتژی و Decision AI',
     backtest: 'شبیه‌ساز تاریخی و خودآموزی',
-    debug: 'کنسول لاگ زنده و سلامت سیستم'
+    debug: 'کنسول لاگ زنده و عیب‌یابی'
   };
 
   function notice(text, error = false) {
@@ -117,11 +123,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     n.className = error ? 'error' : '';
   }
 
-  // Safe DOM node builder (pure DOM APIs)
+  // Safe DOM node builder (pure DOM APIs only)
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = text;
+    return node;
+  }
+
+  function svgEl(tag, attrs = {}) {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      node.setAttribute(k, String(v));
+    }
     return node;
   }
 
@@ -144,6 +158,155 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
     return data;
   }
+
+  // --- Interactive Equity Chart with Axes, Gridlines, and Hover Crosshair ---
+  function renderInteractiveEquityChart(points) {
+    const svg = $('equity-svg');
+    const gridG = $('chart-grid');
+    const zeroG = $('chart-zero-line');
+    const labelsG = $('chart-labels');
+    const dotsG = $('chart-dots');
+    const area = $('equity-area');
+    const line = $('equity-line');
+    if (!svg || !line || !Array.isArray(points) || points.length < 2) {
+      cachedEquityPoints = [];
+      cachedCoords = [];
+      return false;
+    }
+
+    cachedEquityPoints = points;
+    const vals = points.map(p => typeof p === 'object' ? Number(p.balance ?? p.pnl ?? 0) : Number(p || 0));
+    const minVal = Math.min(0, ...vals);
+    const maxVal = Math.max(0, ...vals);
+    const span = (maxVal - minVal) || 1.0;
+    const padVal = span * 0.12;
+    const yMin = minVal - padVal;
+    const yMax = maxVal + padVal;
+    const yRange = yMax - yMin;
+
+    const W = 860, H = 200, padL = 54, padR = 14, padT = 14, padB = 18;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
+    const toY = v => Math.round(padT + (1 - (v - yMin) / yRange) * plotH);
+    const stepX = plotW / (vals.length - 1);
+
+    const coords = vals.map((v, i) => [Math.round(padL + i * stepX), toY(v)]);
+    cachedCoords = coords;
+
+    // Gridlines & Y-Axis Labels (4 ticks)
+    if (gridG && labelsG) {
+      gridG.replaceChildren();
+      labelsG.replaceChildren();
+      for (let i = 0; i <= 4; i++) {
+        const val = yMin + (yRange * i) / 4;
+        const y = toY(val);
+        gridG.appendChild(svgEl('line', {
+          x1: padL, y1: y, x2: W - padR, y2: y,
+          stroke: '#1e2638', 'stroke-width': 1, 'stroke-dasharray': '2 3'
+        }));
+        const lbl = svgEl('text', {
+          x: padL - 6, y: y + 3,
+          fill: '#8492a6', 'font-size': 10, 'font-family': 'monospace', 'text-anchor': 'end'
+        });
+        lbl.textContent = `${val >= 0 ? '+' : ''}${val.toFixed(2)}$`;
+        labelsG.appendChild(lbl);
+      }
+      // X-axis labels (start, mid, end)
+      [0, Math.floor((vals.length - 1) / 2), vals.length - 1].forEach((idx, k) => {
+        if (k === 1 && (idx === 0 || idx === vals.length - 1)) return;
+        const x = coords[idx][0];
+        const pt = points[idx];
+        const txt = (typeof pt === 'object' && pt.ts) ? pt.ts.slice(5, 16) : `#${idx}`;
+        const xLbl = svgEl('text', {
+          x, y: 215, fill: '#8492a6', 'font-size': 9.5, 'font-family': 'monospace',
+          'text-anchor': idx === 0 ? 'start' : (idx === vals.length - 1 ? 'end' : 'middle')
+        });
+        xLbl.textContent = txt;
+        labelsG.appendChild(xLbl);
+      });
+    }
+
+    // Zero baseline
+    if (zeroG) {
+      zeroG.replaceChildren();
+      const zy = toY(0);
+      zeroG.appendChild(svgEl('line', {
+        x1: padL, y1: zy, x2: W - padR, y2: zy,
+        stroke: '#334155', 'stroke-width': 1
+      }));
+    }
+
+    const lineD = coords.reduce((acc, [x, y], i) => (i === 0 ? `M${x},${y}` : `${acc} L${x},${y}`), '');
+    line.setAttribute('d', lineD);
+
+    const finalVal = vals[vals.length - 1];
+    const isProfit = finalVal >= 0;
+    const strokeCol = isProfit ? '#10b981' : '#f43f5e';
+    line.setAttribute('stroke', strokeCol);
+
+    if (area) {
+      const zy = toY(0);
+      const lastX = coords[coords.length - 1][0];
+      const firstX = coords[0][0];
+      area.setAttribute('d', `${lineD} L${lastX},${zy} L${firstX},${zy} Z`);
+      area.setAttribute('fill', isProfit ? 'url(#equity-grad)' : 'rgba(244, 63, 94, 0.14)');
+    }
+
+    if (dotsG) {
+      dotsG.replaceChildren();
+      if (coords.length <= 45) {
+        coords.forEach(([x, y], idx) => {
+          if (idx === 0) return;
+          const pt = points[idx];
+          const p = typeof pt === 'object' ? Number(pt.pnl || 0) : 0;
+          dotsG.appendChild(svgEl('circle', {
+            cx: x, cy: y, r: 2.8,
+            fill: p >= 0 ? '#10b981' : '#f43f5e',
+            stroke: '#090c12', 'stroke-width': 1
+          }));
+        });
+      }
+    }
+    return true;
+  }
+
+  // Chart mouse hover crosshair + tooltip
+  const chartWrap = $('equity-chart-wrap');
+  chartWrap?.addEventListener('mousemove', evt => {
+    const svg = $('equity-svg');
+    const crosshair = $('chart-crosshair-x');
+    const tip = $('chart-tooltip');
+    if (!svg || !crosshair || !tip || !cachedCoords.length) return;
+    const rect = svg.getBoundingClientRect();
+    const relX = ((evt.clientX - rect.left) / rect.width) * 860;
+    let bestIdx = 0;
+    let bestDist = Infinity;
+    cachedCoords.forEach(([cx], idx) => {
+      const d = Math.abs(cx - relX);
+      if (d < bestDist) { bestDist = d; bestIdx = idx; }
+    });
+    const [bx] = cachedCoords[bestIdx];
+    const pt = cachedEquityPoints[bestIdx];
+    crosshair.setAttribute('x1', bx);
+    crosshair.setAttribute('x2', bx);
+    crosshair.hidden = false;
+    tip.hidden = false;
+    if (typeof pt === 'object') {
+      const balStr = `${pt.balance >= 0 ? '+' : ''}${Number(pt.balance || 0).toFixed(2)}$`;
+      const pnlStr = `${pt.pnl >= 0 ? '+' : ''}${Number(pt.pnl || 0).toFixed(2)}$`;
+      tip.textContent = pt.idx === 0
+        ? 'نقطه شروع: $0.00'
+        : `#${pt.idx} ${pt.symbol} (${pt.direction}) | معامله: ${pnlStr} | تجمعی: ${balStr} | DD: $${Number(pt.dd || 0).toFixed(2)}${pt.ts ? ' | ' + pt.ts : ''}`;
+    } else {
+      tip.textContent = `معامله #${bestIdx}: ${Number(pt).toFixed(2)}$`;
+    }
+  });
+  chartWrap?.addEventListener('mouseleave', () => {
+    const crosshair = $('chart-crosshair-x');
+    const tip = $('chart-tooltip');
+    if (crosshair) crosshair.hidden = true;
+    if (tip) tip.hidden = true;
+  });
 
   // --- Tab Navigation ---
   document.querySelectorAll('nav .nav').forEach(btn => {
@@ -184,7 +347,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   }
 
-  // --- Save Strategy Settings ---
   $('save-strategy-btn')?.addEventListener('click', async () => {
     const btn = $('save-strategy-btn');
     btn.disabled = true;
@@ -210,7 +372,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // --- Save AI Settings ---
   $('save-ai-btn')?.addEventListener('click', async () => {
     const btn = $('save-ai-btn');
     btn.disabled = true;
@@ -238,7 +399,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // --- Test Decision AI Connection ---
   const testAiBtn = $('test-ai');
   testAiBtn?.addEventListener('click', async () => {
     const out = $('ai-test-result');
@@ -254,7 +414,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // --- Start / Stop Trader ---
   async function toggleTrader(action) {
     notice('');
     const btn = action === 'start' ? startBtn : stopBtn;
@@ -287,7 +446,106 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   startBtn?.addEventListener('click', () => toggleTrader('start'));
   stopBtn?.addEventListener('click', () => toggleTrader('stop'));
 
-  // --- Render Positions Table ---
+  function getAssetLabel(sym, rawClass) {
+    if (rawClass === 'crypto') return { label: 'CRYPTO', cls: 'crypto' };
+    if (rawClass === 'metals') return { label: 'METAL', cls: 'metals' };
+    if (rawClass === 'commodities') return { label: 'OIL', cls: 'commodities' };
+    if (rawClass === 'indices') return { label: 'INDEX', cls: 'indices' };
+    const s = (sym || '').toUpperCase();
+    if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('BNB') || s.includes('XRP') || s.includes('CRYPTO')) {
+      return { label: 'CRYPTO', cls: 'crypto' };
+    }
+    if (s.includes('XAU') || s.includes('GOLD')) return { label: 'GOLD', cls: 'metals' };
+    if (s.includes('BRENT') || s.includes('OIL')) return { label: 'OIL', cls: 'commodities' };
+    if (s.includes('US30') || s.includes('DJ')) return { label: 'INDEX', cls: 'indices' };
+    return { label: 'FOREX', cls: 'forex' };
+  }
+
+  function formatFreshness(isoTs, marketOpen) {
+    if (!marketOpen) return { text: 'بازار بسته (تعطیلات)', cls: 'closed' };
+    if (!isoTs) return { text: 'بدون اسکن', cls: 'stale' };
+    const dt = new Date(isoTs);
+    if (Number.isNaN(dt.getTime())) return { text: 'نامشخص', cls: 'stale' };
+    const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
+    if (diffMin <= 2) return { text: 'لحظاتی پیش (تازه)', cls: 'fresh' };
+    if (diffMin <= 20) return { text: `${diffMin} دقیقه پیش (تازه)`, cls: 'fresh' };
+    if (diffMin < 120) return { text: `${diffMin} دقیقه پیش (قدیمی)`, cls: 'stale' };
+    return { text: `${Math.round(diffMin / 60)} ساعت پیش (قدیمی)`, cls: 'stale' };
+  }
+
+  // --- Unified Pipeline & Non-Entry / Entry Audit Matrix ---
+  function renderPipelineAudit(theses) {
+    const root = $('pipeline-audit-table');
+    if (!root) return;
+    root.replaceChildren();
+    const entries = Object.entries(theses || {});
+    if (!entries.length) {
+      root.appendChild(el('div', 'empty', 'هنوز هیچ نمادی اسکن نشده است.'));
+      return;
+    }
+
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const htr = document.createElement('tr');
+    ['نماد و بازار', 'زمان کندل و تازگی', 'مراحل فیلتر (Pipeline)', 'وضعیت و دلیل ورود / عدم ورود'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr);
+    t.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (const [sym, info] of entries) {
+      const tr = document.createElement('tr');
+
+      // 1. Symbol & Market badge
+      const tdSym = el('td');
+      const asset = getAssetLabel(sym, info.is_crypto ? 'crypto' : '');
+      tdSym.appendChild(el('span', `asset-pill ${asset.cls}`, asset.label));
+      tdSym.appendChild(el('strong', '', sym));
+      tr.appendChild(tdSym);
+
+      // 2. Candle timestamp & Freshness
+      const tdTime = el('td');
+      const candleStr = info.candle_time ? info.candle_time.replace('T', ' ').slice(5, 16) : 'N/A';
+      tdTime.appendChild(el('div', '', `${info.entry_tf || 'M15'} : ${candleStr}`));
+      const fresh = formatFreshness(info.analyzed_at || info.ts, info.market_open !== false);
+      tdTime.appendChild(el('span', `freshness-pill ${fresh.cls}`, fresh.text));
+      tr.appendChild(tdTime);
+
+      // 3. Stage-by-Stage Pipeline Pills
+      const tdStages = el('td');
+      const wrap = el('div', 'stage-pills');
+      const stages = Array.isArray(info.pipeline_stages) ? info.pipeline_stages : [];
+      if (stages.length) {
+        stages.forEach(st => {
+          const icon = st.status === 'pass' ? '✓' : (st.status === 'fail' ? '✗' : (st.status === 'wait' ? '◷' : '-'));
+          const pill = el('span', `stage-pill ${st.status || ''}`, `${st.label} ${icon}${st.detail ? ' (' + st.detail + ')' : ''}`);
+          wrap.appendChild(pill);
+        });
+      } else {
+        wrap.appendChild(el('span', 'stage-pill', info.regime || 'PENDING'));
+      }
+      tdStages.appendChild(wrap);
+      tr.appendChild(tdStages);
+
+      // 4. Category + Exact Reason (Entry or Non-Entry)
+      const tdReason = el('td', 'reason-cell');
+      const cat = info.persian_category || 'پایش';
+      let catCls = 'category-tag';
+      if (cat.includes('ورود فعال') || cat.includes('سیگنال')) catCls += ' tag-signal';
+      else if (cat.includes('رد شده') || cat.includes('رول‌اور')) catCls += ' tag-warning';
+      tdReason.appendChild(el('span', catCls, cat));
+      tdReason.appendChild(el('div', '', info.persian_desc || info.thesis || 'در حال پایش...'));
+      tr.appendChild(tdReason);
+
+      tbody.appendChild(tr);
+    }
+    t.appendChild(tbody);
+    root.appendChild(t);
+  }
+
   function renderPositions(rows) {
     const root = $('positions');
     if (!root) return;
@@ -301,7 +559,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const headerTr = document.createElement('tr');
-    ['تیکت', 'نماد', 'جهت', 'حجم', 'قیمت ورود', 'حد ضرر', 'حد سود', 'سود / زیان'].forEach(h => {
+    ['تیکت', 'نماد', 'جهت', 'حجم', 'ورود', 'SL / TP', 'سود / زیان'].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       headerTr.appendChild(th);
@@ -321,11 +579,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       tr.appendChild(tdDir);
       tr.appendChild(el('td', '', `${r.volume} lot`));
       tr.appendChild(el('td', '', String(r.entry_price || 'N/A')));
-      tr.appendChild(el('td', '', r.stop_loss ? String(r.stop_loss) : 'N/A'));
-      tr.appendChild(el('td', '', r.take_profit ? String(r.take_profit) : 'N/A'));
+      tr.appendChild(el('td', '', `${r.stop_loss || 'N/A'} / ${r.take_profit || 'N/A'}`));
       const pnl = Number(r.profit_loss || 0);
-      const pnlTd = el('td', pnl >= 0 ? 'pill-win' : 'pill-loss', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} $`);
-      tr.appendChild(pnlTd);
+      tr.appendChild(el('td', pnl >= 0 ? 'pill-win' : 'pill-loss', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} $`));
       b.appendChild(tr);
     });
     t.appendChild(b);
@@ -346,9 +602,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       opt.textContent = `${s} (واچ‌لیست)`;
       sel.appendChild(opt);
     });
-    if (symbols.includes(curVal)) {
-      sel.value = curVal;
-    }
+    if (symbols.includes(curVal)) sel.value = curVal;
   }
 
   function renderBacktestTrades(trades) {
@@ -359,16 +613,16 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     card.hidden = false;
     if (!trades || !trades.length) {
       if (badge) badge.textContent = '0 معامله';
-      view.replaceChildren(el('div', 'empty', 'در این بازه تاریخی هیچ ستاپی طبق فیلترهای استراتژی صادر نشد (فیلترهای مومنتوم ADX و عدم ورود در رِنج مانع ورود پرریسک شدند).'));
+      view.replaceChildren(el('div', 'empty', 'در این بازه تاریخی هیچ ستاپی طبق فیلترهای استراتژی صادر نشد.'));
       return;
     }
-    if (badge) badge.textContent = `${trades.length} معامله انجام شد`;
+    if (badge) badge.textContent = `${trades.length} معامله`;
     view.replaceChildren();
 
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const headerTr = document.createElement('tr');
-    ['#', 'جهت', 'زمان ورود', 'زمان خروج', 'قیمت ورود', 'قیمت خروج', 'حجم', 'سود / زیان', 'نتیجه'].forEach(h => {
+    ['#', 'جهت', 'ورود', 'خروج', 'قیمت ورود', 'قیمت خروج', 'حجم', 'سود / زیان', 'نتیجه'].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       headerTr.appendChild(th);
@@ -414,29 +668,13 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   $('filter-crypto-btn')?.addEventListener('click', () => setTradeFilter('crypto'));
   $('filter-tradfi-btn')?.addEventListener('click', () => setTradeFilter('tradfi'));
 
-  function getAssetLabel(sym, rawClass) {
-    if (rawClass === 'crypto') return { label: 'CRYPTO', cls: 'crypto' };
-    if (rawClass === 'metals') return { label: 'METAL', cls: 'metals' };
-    if (rawClass === 'commodities') return { label: 'OIL', cls: 'commodities' };
-    if (rawClass === 'indices') return { label: 'INDEX', cls: 'indices' };
-    const s = (sym || '').toUpperCase();
-    if (s.includes('BTC') || s.includes('ETH') || s.includes('SOL') || s.includes('CRYPTO')) {
-      return { label: 'CRYPTO', cls: 'crypto' };
-    }
-    if (s.includes('XAU') || s.includes('GOLD')) return { label: 'GOLD', cls: 'metals' };
-    if (s.includes('BRENT') || s.includes('OIL')) return { label: 'OIL', cls: 'commodities' };
-    if (s.includes('US30') || s.includes('DJ')) return { label: 'INDEX', cls: 'indices' };
-    return { label: 'FOREX', cls: 'forex' };
-  }
-
   function renderTrades(rows) {
     cachedTrades = rows || [];
     const root = $('trades');
     if (!root) return;
 
-    // Filter by asset class
-    const cryptoTrades = cachedTrades.filter(r => (r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
-    const tradfiTrades = cachedTrades.filter(r => !(r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC/i.test(r.symbol || '')));
+    const cryptoTrades = cachedTrades.filter(r => (r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC|XRP/i.test(r.symbol || '')));
+    const tradfiTrades = cachedTrades.filter(r => !(r.asset_class === 'crypto' || /BTC|ETH|SOL|BNB|LTC|XRP/i.test(r.symbol || '')));
 
     if ($('count-all')) $('count-all').textContent = String(cachedTrades.length);
     if ($('count-crypto')) $('count-crypto').textContent = String(cryptoTrades.length);
@@ -449,8 +687,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.replaceChildren();
     if (!displayRows || !displayRows.length) {
       const msg = activeTradeFilter === 'crypto'
-        ? 'هنوز معامله‌ای در بازار کریپتو بسته نشده است (با افزودن BTCUSD یا ETHUSD فعال می‌شود).'
-        : 'هیچ معامله بسته‌شده‌ای در این دسته‌بندی وجود ندارد.';
+        ? 'هنوز معامله‌ای در بازار کریپتو ثبت نشده است.'
+        : 'هیچ معامله‌ای در این دسته‌بندی وجود ندارد.';
       root.appendChild(el('div', 'empty', msg));
       return;
     }
@@ -458,7 +696,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const headerTr = document.createElement('tr');
-    ['نماد و بازار', 'جهت', 'حجم', 'قیمت ورود', 'قیمت خروج', 'سود / زیان', 'نتیجه'].forEach(h => {
+    ['نماد', 'جهت و حجم', 'ورود / خروج', 'سود / زیان', 'دلیل ورود و تحلیل'].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       headerTr.appendChild(th);
@@ -474,34 +712,30 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       const tr = document.createElement('tr');
 
-      // Symbol + Asset Badge
       const tdSym = el('td');
       const asset = getAssetLabel(r.symbol, r.asset_class);
-      const assetPill = el('span', `asset-pill ${asset.cls}`, asset.label);
-      tdSym.appendChild(assetPill);
+      tdSym.appendChild(el('span', `asset-pill ${asset.cls}`, asset.label));
       tdSym.appendChild(el('strong', '', r.symbol));
       tr.appendChild(tdSym);
 
-      // Direction
       const tdDir = el('td');
       tdDir.appendChild(el('span', r.direction === 'BUY' ? 'pill-buy' : 'pill-sell', r.direction || 'N/A'));
+      tdDir.appendChild(el('span', '', ` ${r.position_size || 0.01}`));
       tr.appendChild(tdDir);
 
-      // Volume
-      tr.appendChild(el('td', '', `${r.position_size || 0.01} lot`));
-
-      // Entry & Exit
       const entryVal = r.entry != null ? String(r.entry) : (r.entry_price != null ? String(r.entry_price) : 'N/A');
-      tr.appendChild(el('td', '', entryVal));
-      tr.appendChild(el('td', '', r.exit_price != null ? String(r.exit_price) : 'N/A'));
+      const exitVal = r.exit_price != null ? String(r.exit_price) : 'باز';
+      tr.appendChild(el('td', '', `${entryVal} / ${exitVal}`));
 
-      // PnL
       tr.appendChild(el('td', pnlClass, pnlText));
 
-      // Outcome Badge
-      const tdOutcome = el('td');
-      tdOutcome.appendChild(el('span', pnl >= 0 ? 'pill-win' : 'pill-loss', pnl >= 0 ? 'برد' : 'باخت'));
-      tr.appendChild(tdOutcome);
+      const tdReason = el('td', 'reason-cell');
+      const reasonTxt = r.setup || r.thesis || 'Quant Setup';
+      tdReason.appendChild(el('div', '', reasonTxt.slice(0, 90)));
+      if (pnl < 0 && r.review_text) {
+        tdReason.appendChild(el('span', 'loss-reason-note', `علت ضرر: ${r.review_text}`));
+      }
+      tr.appendChild(tdReason);
 
       b.appendChild(tr);
     });
@@ -509,16 +743,68 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.appendChild(t);
   }
 
+  // --- Post-Trade Loss Analysis & Adaptive Learning Table ---
+  function renderLossAudits(lossAudits, learnedProfiles) {
+    const root = $('loss-audits-view');
+    const badge = $('loss-audit-badge');
+    if (!root) return;
+    root.replaceChildren();
+    const audits = Array.isArray(lossAudits) ? lossAudits : [];
+    const learnedEntries = Object.entries(learnedProfiles || {}).filter(([, v]) => v && v.last_lesson);
+
+    if (badge) badge.textContent = `${audits.length} ضرر بررسی‌شده`;
+    if (!audits.length && !learnedEntries.length) {
+      root.appendChild(el('div', 'empty', 'تاکنون هیچ معامله زیان‌دهی ثبت نشده است.'));
+      return;
+    }
+
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const htr = document.createElement('tr');
+    ['نماد', 'زمان خروج', 'زیان ($)', 'دسته‌بندی خطا', 'کالبدشکافی و درس آموخته'].forEach(h => {
+      const th = document.createElement('th');
+      th.textContent = h;
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr);
+    t.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    audits.forEach(a => {
+      const tr = document.createElement('tr');
+      const tdSym = el('td');
+      tdSym.appendChild(el('strong', '', a.symbol || 'N/A'));
+      tr.appendChild(tdSym);
+      tr.appendChild(el('td', '', (a.exit_ts || '').replace('T', ' ').slice(5, 16) || 'N/A'));
+      tr.appendChild(el('td', 'pill-loss', `${Number(a.profit_loss || 0).toFixed(2)} $`));
+      tr.appendChild(el('td', '', a.classification || 'LOSS_CLOSED'));
+      const tdRev = el('td', 'reason-cell', a.review || 'بررسی خودکار ثبت نشده؛ در حال پایش الگوی بعدی.');
+      tr.appendChild(tdRev);
+      tbody.appendChild(tr);
+    });
+
+    learnedEntries.forEach(([sym, prof]) => {
+      const tr = document.createElement('tr');
+      tr.appendChild(el('td', '', sym));
+      tr.appendChild(el('td', '', 'تنظیم تطبیقی'));
+      tr.appendChild(el('td', '', `ADX>=${prof.params?.adx_min || 18}`));
+      tr.appendChild(el('td', '', 'SELF_LEARNED'));
+      tr.appendChild(el('td', 'reason-cell', prof.last_lesson));
+      tbody.appendChild(tr);
+    });
+
+    t.appendChild(tbody);
+    root.appendChild(t);
+  }
+
   // --- Main Real-Time Refresh Loop ---
   async function refresh() {
     try {
-      // 1. Session & CSRF
       if (!csrf) {
         const sess = await api('/api/session');
         csrf = sess.csrf_token;
       }
 
-      // 2. Overview & Process State Fetch
       const [overview, proc, perf, pos, trades, theses] = await Promise.all([
         api('/api/overview').catch(() => ({})),
         api('/api/process').catch(() => ({ state: 'UNKNOWN' })),
@@ -528,34 +814,30 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         api('/api/thesis').catch(() => ({}))
       ]);
 
-      // Reset network error count on success
       consecutiveNetErrors = 0;
 
-      // Header & Process buttons
       const isRunning = Boolean(proc.running || proc.state === 'RUNNING');
-      setTxt('process-state', isRunning ? 'فعال و آنلاین' : 'متوقف');
+      setTxt('process-state', isRunning ? 'فعال' : 'متوقف');
       setCls('process-state', `kpi-val ${isRunning ? 'good' : 'bad'}`);
       const startEl = $('start-agent');
       const stopEl = $('stop-agent');
       if (startEl) startEl.disabled = isRunning;
       if (stopEl) stopEl.disabled = !isRunning;
-      setTxt('connection', isRunning ? 'ترمینال متصل است' : 'آماده به کار');
+      setTxt('connection', isRunning ? 'ترمینال متصل' : 'آماده');
       setCls('connection', 'telemetry-pill ' + (isRunning ? 'good' : ''));
 
-      // Database Alert check
       const dbAlert = $('db-alert');
       if (dbAlert) {
         if (overview.database_broken) {
           dbAlert.hidden = false;
-          dbAlert.textContent = 'پایگاه داده قفل یا معیوب است. برای بازیابی خودکار: python recover_db.py';
+          dbAlert.textContent = 'پایگاه داده قفل یا معیوب است. برای بازیابی: python recover_db.py';
         } else {
           dbAlert.hidden = true;
         }
       }
 
-      // Balance & MT5
       const acc = overview.account || {};
-      const bal = Number(acc.balance ?? 29.56);
+      const bal = Number(acc.balance ?? 30.0);
       if (acc.balance != null) {
         setTxt('live-balance', `$${acc.balance.toFixed(2)}`);
         setTxt('live-equity', `Equity: $${acc.equity?.toFixed(2) || acc.balance.toFixed(2)}`);
@@ -565,7 +847,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         setTxt('live-equity', `Equity: $${bal.toFixed(2)}`);
       }
 
-      // Today PnL & Percentage
       const todayPnl = Number(overview.today_pnl || 0);
       const todayPct = Number(overview.today_pnl_percent || (bal > 0 ? (todayPnl / bal * 100) : 0));
       setTxt('today-pnl', `${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)} $`);
@@ -573,7 +854,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}% امروز`);
       setCls('today-pnl-pct', `kpi-sub num ${todayPnl >= 0 ? 'good' : 'bad'}`);
 
-      // Total PnL & Percentage
       const totalPnl = Number(overview.total_pnl || 0);
       const totalPct = Number(overview.total_pnl_percent || (totalPnl / 30.0 * 100));
       setTxt('total-pnl', `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} $`);
@@ -581,16 +861,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}% بازدهی کل`);
       setCls('total-pnl-pct', `kpi-sub num ${totalPnl >= 0 ? 'good' : 'bad'}`);
 
-      setTxt('open-pos', `${(pos || []).length} معامله باز`);
+      setTxt('open-pos', String((pos || []).length));
 
       // KPIs
       const sum = perf.summary || {};
       const totalTrades = Number(sum.total_trades || (trades || []).length);
       const winRate = Number(sum.win_rate || 0);
       setTxt('kpi-winrate', totalTrades ? `${winRate.toFixed(1)}%` : 'N/A');
-      setTxt('winrate-badge', `وین‌ریت: ${totalTrades ? winRate.toFixed(0) + '%' : '0%'}`);
+      setTxt('winrate-badge', `وین‌ریت کل: ${totalTrades ? winRate.toFixed(0) + '%' : '0%'}`);
       setTxt('kpi-pf', totalTrades && sum.profit_factor != null ? (sum.profit_factor >= 99 ? 'Max' : Number(sum.profit_factor).toFixed(2)) : 'N/A');
-      setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)}` : '$0.00');
+      setTxt('kpi-sharpe', totalTrades >= 2 && sum.sharpe_ratio != null ? Number(sum.sharpe_ratio).toFixed(2) : 'N/A');
+      setTxt('kpi-exp', totalTrades && sum.expectancy != null ? `${sum.expectancy >= 0 ? '+' : ''}$${Number(sum.expectancy).toFixed(2)}` : '$0.00');
+      setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)} (${sum.max_drawdown_pct || 0}%)` : '$0.00');
 
       // Crypto vs TradFi Asset Breakdown
       const cStats = sum.crypto_stats || {};
@@ -599,58 +881,39 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const tPnl = Number(tStats.total_pnl != null ? tStats.total_pnl : totalPnl);
 
       setTxt('crypto-pnl', `${cPnl >= 0 ? '+' : ''}${cPnl.toFixed(2)} $`);
-      setCls('crypto-pnl', `deck-value num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
-      setTxt('crypto-pct', `${Number(cStats.return_percent || 0) >= 0 ? '+' : ''}${Number(cStats.return_percent || 0).toFixed(1)}% بازدهی`);
-      setCls('crypto-pct', `deck-badge num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : 'neutral')}`);
+      setCls('crypto-pnl', `num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : '')}`);
+      setTxt('crypto-pct', `${Number(cStats.return_percent || 0) >= 0 ? '+' : ''}${Number(cStats.return_percent || 0).toFixed(1)}%`);
+      setCls('crypto-pct', `num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : '')}`);
       setTxt('crypto-count', String(cStats.trades || 0));
-      setTxt('crypto-wl', `${cStats.wins || 0} برد / ${cStats.losses || 0} باخت`);
+      setTxt('crypto-wl', `${cStats.wins || 0} / ${cStats.losses || 0}`);
       setTxt('crypto-winrate', cStats.trades ? `${cStats.win_rate}%` : 'N/A');
-      setTxt('crypto-pf', cStats.trades ? `ضریب سود: ${cStats.profit_factor}` : 'ضریب سود: N/A');
+      setTxt('crypto-pf', cStats.trades ? String(cStats.profit_factor) : 'N/A');
 
       setTxt('tradfi-pnl', `${tPnl >= 0 ? '+' : ''}${tPnl.toFixed(2)} $`);
-      setCls('tradfi-pnl', `deck-value num ${tPnl >= 0 ? 'good' : 'bad'}`);
+      setCls('tradfi-pnl', `num ${tPnl >= 0 ? 'good' : 'bad'}`);
       const retVal = Number(tStats.return_percent != null ? tStats.return_percent : totalPct);
-      setTxt('tradfi-pct', `${retVal >= 0 ? '+' : ''}${retVal.toFixed(1)}% بازدهی`);
-      setCls('tradfi-pct', `deck-badge num ${tPnl >= 0 ? 'good' : 'bad'}`);
+      setTxt('tradfi-pct', `${retVal >= 0 ? '+' : ''}${retVal.toFixed(1)}%`);
+      setCls('tradfi-pct', `num ${tPnl >= 0 ? 'good' : 'bad'}`);
       setTxt('tradfi-count', String(tStats.trades != null ? tStats.trades : totalTrades));
-      setTxt('tradfi-wl', `${tStats.wins != null ? tStats.wins : (sum.wins || 0)} برد / ${tStats.losses != null ? tStats.losses : (sum.losses || 0)} باخت`);
+      setTxt('tradfi-wl', `${tStats.wins != null ? tStats.wins : (sum.wins || 0)} / ${tStats.losses != null ? tStats.losses : (sum.losses || 0)}`);
       setTxt('tradfi-winrate', tStats.trades ? `${tStats.win_rate}%` : (totalTrades ? `${winRate.toFixed(1)}%` : 'N/A'));
-      setTxt('tradfi-pf', tStats.trades ? `ضریب سود: ${tStats.profit_factor}` : `ضریب سود: ${sum.profit_factor || 'N/A'}`);
+      setTxt('tradfi-pf', tStats.trades ? String(tStats.profit_factor) : String(sum.profit_factor || 'N/A'));
 
-      // Dynamic backtest symbols sync from active watchlist
       if (theses && Object.keys(theses).length > 0) {
         updateBacktestSymbols(Object.keys(theses));
       }
 
-      // Equity Curve
-      const curve = sum.equity_curve || [];
-      const hasDrawn = renderSvgCurve('equity-svg', 'equity-area', 'equity-line', curve);
+      // Interactive Equity Curve
+      const pts = (sum.equity_points && sum.equity_points.length >= 2) ? sum.equity_points : (sum.equity_curve || []);
+      const hasDrawn = renderInteractiveEquityChart(pts);
       const chartMsg = $('chart-empty-msg');
       if (chartMsg) chartMsg.hidden = hasDrawn;
 
-      // Positions & Trades
+      // Render Unified Pipeline Audit, Positions, Trades, and Loss Audits
+      renderPipelineAudit(theses);
       renderPositions(pos);
       renderTrades(trades);
-
-      // Theses & Market Regimes
-      const thBox = $('theses');
-      if (thBox) {
-        thBox.replaceChildren();
-        const thEntries = Object.entries(theses);
-        if (!thEntries.length) {
-          thBox.appendChild(el('div', 'empty', 'در حال حاضر هیچ نمادی برای تحلیل ثبت نشده است.'));
-        } else {
-          for (const [sym, t] of thEntries) {
-            const d = document.createElement('details');
-            const s = document.createElement('summary');
-            const p = document.createElement('p');
-            s.textContent = `${sym} : ${t.bias || 'WAIT'} : ${t.regime || 'UNCLEAR'}`;
-            p.textContent = t.thesis || 'درحال تحلیل ساختار تکنیکال مارکت...';
-            d.append(s, p);
-            thBox.appendChild(d);
-          }
-        }
-      }
+      renderLossAudits(perf.loss_audits || [], perf.learned_profiles || {});
 
       // Rejections Banner
       const rejections = overview.recent_rejections || [];
@@ -661,7 +924,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           rejBanner.hidden = false;
           rejBanner.replaceChildren();
           const strong = document.createElement('strong');
-          strong.textContent = 'آخرین موقعیت‌های وتوشده توسط مدیریت ریسک یا هوش مصنوعی: ';
+          strong.textContent = 'آخرین ستاپ‌های وتوشده توسط مدیریت ریسک: ';
           rejBanner.appendChild(strong);
           const ul = document.createElement('ul');
           ul.style.margin = '6px 0 0';
@@ -678,37 +941,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         }
       }
 
-      // Non-Entry & Filter Reasons Grid
-      const filterGrid = $('filter-reasons-grid');
-      if (filterGrid) {
-        filterGrid.replaceChildren();
-        const entries = Object.entries(theses || {});
-        if (!entries.length) {
-          filterGrid.appendChild(el('div', 'empty', 'هنوز تحلیلی برای وضعیت نمادها ثبت نشده است.'));
-        } else {
-          for (const [sym, t] of entries) {
-            const card = el('div', 'filter-item');
-            const head = el('div', 'filter-item-head');
-            const symTag = el('strong', '', sym);
-            
-            const cat = t.persian_category || 'پایش بازار';
-            let catClass = 'category-tag';
-            if (cat.includes('رد شده') || cat.includes('Rollover')) catClass += ' tag-warning';
-            else if (cat.includes('سیگنال')) catClass += ' tag-signal';
-            const catTag = el('span', catClass, cat);
-
-            head.append(symTag, catTag);
-
-            const pDesc = el('p', '', t.persian_desc || t.thesis || 'در حال پایش دیتای زنده مارکت...');
-            const sm = el('small', '', `وضعیت تکنیکال: ${t.regime || 'نامشخص'} : سیگنال: ${t.bias || 'WAIT'}`);
-
-            card.append(head, pDesc, sm);
-            filterGrid.appendChild(card);
-          }
-        }
-      }
-
-      // Live Logs & Output View
+      // Live Logs
       const logsEl = $('process-logs');
       if (logsEl) {
         const rawLogs = (proc && Array.isArray(proc.logs) && proc.logs.length) ? proc.logs : [];
@@ -716,9 +949,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         if (lines.length) {
           const isAtBottom = logsEl.scrollHeight - logsEl.clientHeight <= logsEl.scrollTop + 50;
           logsEl.textContent = lines.join('\n');
-          if (isAtBottom) {
-            logsEl.scrollTop = logsEl.scrollHeight;
-          }
+          if (isAtBottom) logsEl.scrollTop = logsEl.scrollHeight;
         } else if (isRunning) {
           logsEl.textContent = 'فرآیند تریدر فعال است و در حال اتصال و اجرای چرخه معاملاتی می‌باشد...';
         } else {
@@ -730,7 +961,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     } catch (e) {
       console.error('Refresh loop error:', e);
       consecutiveNetErrors++;
-      // Only switch status to error after 3 consecutive failures to avoid flickering
       if (consecutiveNetErrors >= 3) {
         setTxt('connection', 'خطا در شبکه');
         setCls('connection', 'telemetry-pill bad');
@@ -756,13 +986,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       $('bt-net-pnl').className = `kpi-val num ${res.net_profit >= 0 ? 'good' : 'bad'}`;
       $('bt-winrate').textContent = `${res.win_rate}% (${res.wins} برد / ${res.losses} باخت)`;
       $('bt-trades-count').textContent = `${res.total_trades} ترید`;
-      $('bt-pf-badge').textContent = `Profit Factor: ${res.profit_factor}`;
-      $('bt-summary-title').textContent = `بک‌تست ${res.symbol} روی ${res.candles_analyzed} کندل پایان یافت (${res.total_trades} معامله انجام شد).`;
+      $('bt-pf-badge').textContent = `PF: ${res.profit_factor}`;
+      $('bt-summary-title').textContent = `بک‌تست ${res.symbol} روی ${res.candles_analyzed} کندل پایان یافت (${res.total_trades} معامله).`;
 
-      // Render backtest equity curve
       renderSvgCurve('bt-equity-svg', 'bt-area', 'bt-line', res.equity_curve || [], payload.balance);
-
-      // Render detailed trades log table
       renderBacktestTrades(res.trades || []);
     } catch (e) {
       notice(e.message, true);
@@ -776,7 +1003,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const btn = $('run-train-btn');
     btn.disabled = true;
     notice('');
-    $('bt-summary-title').textContent = 'در حال آموزش مدل و بهینه‌سازی پارامترها (Walk-Forward Self-Training)...';
+    $('bt-summary-title').textContent = 'در حال آموزش مدل و بهینه‌سازی پارامترها...';
     try {
       const payload = {
         symbol: $('bt-symbol').value,
@@ -791,10 +1018,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       $('bt-net-pnl').className = `kpi-val num ${Number(res.net_profit || 0) >= 0 ? 'good' : 'bad'}`;
       $('bt-winrate').textContent = `${res.win_rate}%`;
       $('bt-trades-count').textContent = `${res.total_trades} ترید`;
-      $('bt-pf-badge').textContent = `Profit Factor: ${res.optimized_profit_factor}`;
+      $('bt-pf-badge').textContent = `PF: ${res.optimized_profit_factor}`;
       $('bt-summary-title').textContent = `آموزش ${res.symbol} پایان یافت! ضریب سود به ${res.optimized_profit_factor} ارتقا یافت (${res.total_trades} معامله).`;
 
-      // Render lessons learned
       const lBox = $('bt-lessons-box');
       const lList = $('bt-lessons-list');
       if (lBox && lList) {
@@ -818,7 +1044,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   });
 
-  // --- Log View Tools ---
   $('log-copy')?.addEventListener('click', () => {
     const txt = $('process-logs').textContent;
     navigator.clipboard.writeText(txt).then(() => notice('لاگ‌ها با موفقیت در کلیپ‌بورد کپی شدند.'));
@@ -828,7 +1053,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   });
   $('refresh')?.addEventListener('click', refresh);
 
-  // Auto-refresh interval (every 4 seconds)
   refresh();
   setInterval(refresh, 4000);
 });

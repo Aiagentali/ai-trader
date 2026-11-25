@@ -93,12 +93,14 @@ class PerformanceTracker:
         commodities_trades = [t for t in trades if get_asset_class(t.get("symbol")) == "commodities"]
         indices_trades = [t for t in trades if get_asset_class(t.get("symbol")) == "indices"]
 
-        # Max drawdown
+        # Max drawdown & rich equity points
         equity_curve = []
-        running = 0
-        peak = 0
-        max_dd = 0
-        for p in pnls:
+        equity_points = [{"idx": 0, "ts": "", "symbol": "START", "direction": "", "pnl": 0.0, "balance": 0.0, "dd": 0.0}]
+        running = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for idx, t in enumerate(trades, start=1):
+            p = float(t.get("profit_loss") or 0.0)
             running += p
             equity_curve.append(round(running, 2))
             if running > peak:
@@ -106,6 +108,26 @@ class PerformanceTracker:
             dd = peak - running
             if dd > max_dd:
                 max_dd = dd
+            equity_points.append({
+                "idx": idx,
+                "ts": (t.get("exit_ts") or "")[:16].replace("T", " "),
+                "symbol": t.get("symbol") or "",
+                "direction": t.get("direction") or "",
+                "pnl": round(p, 2),
+                "balance": round(running, 2),
+                "dd": round(dd, 2),
+            })
+
+        import math, statistics
+        sharpe_ratio = 0.0
+        if len(pnls) >= 2:
+            try:
+                sd = statistics.stdev(pnls)
+                if sd > 1e-9:
+                    sharpe_ratio = round((statistics.mean(pnls) / sd) * math.sqrt(len(pnls)), 2)
+            except statistics.StatisticsError:
+                sharpe_ratio = 0.0
+        max_dd_pct = round((max_dd / max(1.0, base_bal + peak)) * 100, 2)
 
         # Consecutive losses
         max_consec_loss = 0
@@ -150,10 +172,13 @@ class PerformanceTracker:
             "avg_loss": round(avg_loss, 2),
             "avg_r_multiple": round(avg_r, 2),
             "max_drawdown": round(max_dd, 2),
+            "max_drawdown_pct": max_dd_pct,
+            "sharpe_ratio": sharpe_ratio,
             "max_consecutive_losses": max_consec_loss,
             "max_consecutive_wins": max_consec_win,
             "avg_holding_time_hours": round(avg_hold, 2),
             "equity_curve": equity_curve,
+            "equity_points": equity_points,
             "crypto_stats": _calc_stats(crypto_trades, base_bal),
             "tradfi_stats": _calc_stats(tradfi_trades, base_bal),
             "by_asset_class": {
