@@ -519,6 +519,18 @@ def api_config_full():
     return jsonify(cfg)
 
 
+@dashboard.route("/api/reports/weekly")
+def api_weekly_report():
+    """Generate and return the weekly Markdown audit report."""
+    from app.journal.weekly_audit import generate_weekly_markdown
+    repo = _get_repo()
+    out_dir = current_app.config.get("PANEL_ROOT", ".")
+    from pathlib import Path
+    rep_dir = str(Path(out_dir) / "reports")
+    res = generate_weekly_markdown(repo, output_dir=rep_dir)
+    return jsonify({"ok": True, **res})
+
+
 def create_app(config=None):
     from pathlib import Path
     from app.dashboard.control import register_control

@@ -186,7 +186,8 @@ class Agent:
                 else:
                     log.info(f"{sym} | Decision AI approved: {ai_eval.get('reason')}")
                     decision["thesis"] += f" | Decision AI: {ai_eval.get('reason')}"
-                    stages.append({"key": "ai", "label": "Decision AI", "status": "pass", "detail": "تایید شد"})
+                    decision["gemini_prob"] = ai_eval.get("confidence")
+                    stages.append({"key": "ai", "label": "Decision AI", "status": "pass", "detail": f"تایید ({ai_eval.get('confidence')}%)"})
 
             log.info(f"{sym} | state={self.state.value} | decision={d} | "
                      f"confidence={decision.get('confidence')}")

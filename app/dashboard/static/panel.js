@@ -107,9 +107,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   let consecutiveNetErrors = 0;
   let cachedEquityPoints = [];
   let cachedCoords = [];
+  let chartMode = 'pnl'; // 'pnl' | 'dd'
+  let cachedTheses = {};
+  let selectedSymbol = null;
 
   const titles = {
-    monitor: 'میز معاملات و پایپ‌لاین تصمیم‌گیری',
+    monitor: 'میز معاملات و پایش سیستم',
     settings: 'پیکربندی استراتژی و Decision AI',
     backtest: 'شبیه‌ساز تاریخی و خودآموزی',
     debug: 'کنسول لاگ زنده و عیب‌یابی'
@@ -123,7 +126,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     n.className = error ? 'error' : '';
   }
 
-  // Safe DOM node builder (pure DOM APIs only)
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -159,7 +161,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     return data;
   }
 
-  // --- Interactive Equity Chart with Axes, Gridlines, and Hover Crosshair ---
+  // --- Interactive Chart (Cumulative PnL OR Drawdown) ---
   function renderInteractiveEquityChart(points) {
     const svg = $('equity-svg');
     const gridG = $('chart-grid');
@@ -175,7 +177,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
 
     cachedEquityPoints = points;
-    const vals = points.map(p => typeof p === 'object' ? Number(p.balance ?? p.pnl ?? 0) : Number(p || 0));
+    const vals = points.map(p => {
+      if (typeof p !== 'object') return Number(p || 0);
+      return chartMode === 'dd' ? -Math.abs(Number(p.dd || 0)) : Number(p.balance ?? p.pnl ?? 0);
+    });
     const minVal = Math.min(0, ...vals);
     const maxVal = Math.max(0, ...vals);
     const span = (maxVal - minVal) || 1.0;
@@ -193,7 +198,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const coords = vals.map((v, i) => [Math.round(padL + i * stepX), toY(v)]);
     cachedCoords = coords;
 
-    // Gridlines & Y-Axis Labels (4 ticks)
     if (gridG && labelsG) {
       gridG.replaceChildren();
       labelsG.replaceChildren();
@@ -211,7 +215,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         lbl.textContent = `${val >= 0 ? '+' : ''}${val.toFixed(2)}$`;
         labelsG.appendChild(lbl);
       }
-      // X-axis labels (start, mid, end)
       [0, Math.floor((vals.length - 1) / 2), vals.length - 1].forEach((idx, k) => {
         if (k === 1 && (idx === 0 || idx === vals.length - 1)) return;
         const x = coords[idx][0];
@@ -226,7 +229,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       });
     }
 
-    // Zero baseline
     if (zeroG) {
       zeroG.replaceChildren();
       const zy = toY(0);
@@ -239,9 +241,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const lineD = coords.reduce((acc, [x, y], i) => (i === 0 ? `M${x},${y}` : `${acc} L${x},${y}`), '');
     line.setAttribute('d', lineD);
 
-    const finalVal = vals[vals.length - 1];
-    const isProfit = finalVal >= 0;
-    const strokeCol = isProfit ? '#10b981' : '#f43f5e';
+    const isGood = chartMode === 'pnl' && vals[vals.length - 1] >= 0;
+    const strokeCol = chartMode === 'dd' ? '#f59e0b' : (isGood ? '#10b981' : '#f43f5e');
     line.setAttribute('stroke', strokeCol);
 
     if (area) {
@@ -249,7 +250,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const lastX = coords[coords.length - 1][0];
       const firstX = coords[0][0];
       area.setAttribute('d', `${lineD} L${lastX},${zy} L${firstX},${zy} Z`);
-      area.setAttribute('fill', isProfit ? 'url(#equity-grad)' : 'rgba(244, 63, 94, 0.14)');
+      area.setAttribute('fill', chartMode === 'dd' ? 'rgba(245, 158, 11, 0.14)' : (isGood ? 'url(#equity-grad)' : 'rgba(244, 63, 94, 0.14)'));
     }
 
     if (dotsG) {
@@ -260,8 +261,8 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           const pt = points[idx];
           const p = typeof pt === 'object' ? Number(pt.pnl || 0) : 0;
           dotsG.appendChild(svgEl('circle', {
-            cx: x, cy: y, r: 2.8,
-            fill: p >= 0 ? '#10b981' : '#f43f5e',
+            cx: x, cy: y, r: 2.6,
+            fill: chartMode === 'dd' ? '#f59e0b' : (p >= 0 ? '#10b981' : '#f43f5e'),
             stroke: '#090c12', 'stroke-width': 1
           }));
         });
@@ -270,7 +271,19 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     return true;
   }
 
-  // Chart mouse hover crosshair + tooltip
+  $('chart-mode-pnl')?.addEventListener('click', () => {
+    chartMode = 'pnl';
+    $('chart-mode-pnl').classList.add('active');
+    $('chart-mode-dd').classList.remove('active');
+    renderInteractiveEquityChart(cachedEquityPoints);
+  });
+  $('chart-mode-dd')?.addEventListener('click', () => {
+    chartMode = 'dd';
+    $('chart-mode-dd').classList.add('active');
+    $('chart-mode-pnl').classList.remove('active');
+    renderInteractiveEquityChart(cachedEquityPoints);
+  });
+
   const chartWrap = $('equity-chart-wrap');
   chartWrap?.addEventListener('mousemove', evt => {
     const svg = $('equity-svg');
@@ -308,7 +321,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (tip) tip.hidden = true;
   });
 
-  // --- Tab Navigation ---
+  // --- Main Tab Navigation ---
   document.querySelectorAll('nav .nav').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('nav .nav').forEach(b => b.classList.remove('active'));
@@ -318,11 +331,39 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const target = $(activeTab);
       if (target) target.hidden = false;
       const pageTitle = $('page-title');
-      if (pageTitle) pageTitle.textContent = titles[activeTab] || 'میز معاملاتی';
+      if (pageTitle) pageTitle.textContent = titles[activeTab] || 'میز معاملات';
       if (activeTab === 'monitor') refresh();
       if (activeTab === 'settings') loadSettings();
     });
   });
+
+  // --- Bottom Dock Tabs ---
+  function switchDock(dockId) {
+    document.querySelectorAll('.dock-tab').forEach(b => b.classList.toggle('active', b.dataset.dock === dockId));
+    document.querySelectorAll('.dock-pane').forEach(p => { p.hidden = (p.id !== dockId); });
+    const fBar = $('trades-filter-bar');
+    if (fBar) fBar.hidden = (dockId !== 'dock-trades');
+  }
+  document.querySelectorAll('.dock-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchDock(btn.dataset.dock));
+  });
+
+  // --- Weekly Markdown Audit Generator ---
+  async function loadWeeklyReport(openDock = false) {
+    try {
+      const res = await api('/api/reports/weekly');
+      setTxt('weekly-path-label', res.path || res.filename || 'reports/weekly.md');
+      setTxt('weekly-md-preview', res.markdown || 'گزارش خالی است.');
+      if (openDock) {
+        switchDock('dock-weekly');
+        notice(`گزارش هفتگی در ${res.filename} ذخیره و نمایش داده شد.`);
+      }
+    } catch (e) {
+      notice(`خطا در تولید گزارش هفتگی: ${e.message}`, true);
+    }
+  }
+  $('export-weekly-btn')?.addEventListener('click', () => loadWeeklyReport(true));
+  $('refresh-weekly-btn')?.addEventListener('click', () => loadWeeklyReport(true));
 
   // --- Load Full Settings ---
   async function loadSettings() {
@@ -430,9 +471,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     } catch (e) {
       const msg = e.message || '';
       if (msg.includes('not reachable') || msg.includes('terminal')) {
-        notice('خطا: ترمینال MetaTrader 5 باز نیست! لطفاً نرم‌افزار متاتریدر ۵ را در ویندوز باز کرده و وارد حساب شوید، سپس مجدداً تلاش کنید.', true);
+        notice('خطا: ترمینال MetaTrader 5 باز نیست! لطفاً نرم‌افزار متاتریدر ۵ را باز کرده و وارد حساب شوید.', true);
       } else if (msg.includes('NOT a demo')) {
-        notice('خطای ایمنی: اکانت متاتریدر دمو نیست! ربات تنها مجاز به فعالیت روی حساب‌های آزمایشی است.', true);
+        notice('خطای ایمنی: اکانت متاتریدر دمو نیست!', true);
       } else {
         notice(`خطا در اجرای فرآیند تریدر: ${msg}`, true);
       }
@@ -462,32 +503,68 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   }
 
   function formatFreshness(isoTs, marketOpen) {
-    if (!marketOpen) return { text: 'بازار بسته (تعطیلات)', cls: 'closed' };
+    if (!marketOpen) return { text: 'تعطیلات', cls: 'closed' };
     if (!isoTs) return { text: 'بدون اسکن', cls: 'stale' };
     const dt = new Date(isoTs);
     if (Number.isNaN(dt.getTime())) return { text: 'نامشخص', cls: 'stale' };
     const diffMin = Math.max(0, Math.round((Date.now() - dt.getTime()) / 60000));
-    if (diffMin <= 2) return { text: 'لحظاتی پیش (تازه)', cls: 'fresh' };
-    if (diffMin <= 20) return { text: `${diffMin} دقیقه پیش (تازه)`, cls: 'fresh' };
-    if (diffMin < 120) return { text: `${diffMin} دقیقه پیش (قدیمی)`, cls: 'stale' };
-    return { text: `${Math.round(diffMin / 60)} ساعت پیش (قدیمی)`, cls: 'stale' };
+    if (diffMin <= 2) return { text: 'تازه', cls: 'fresh' };
+    if (diffMin <= 20) return { text: `${diffMin}m پیش`, cls: 'fresh' };
+    if (diffMin < 120) return { text: `${diffMin}m پیش`, cls: 'stale' };
+    return { text: `${Math.round(diffMin / 60)}h پیش`, cls: 'stale' };
   }
 
-  // --- Unified Pipeline & Non-Entry / Entry Audit Matrix ---
+  function renderSymbolInspector(sym) {
+    const box = $('symbol-inspector');
+    if (!box) return;
+    box.replaceChildren();
+    const info = cachedTheses[sym];
+    if (!info) {
+      box.appendChild(el('div', 'inspector-empty', 'روی هر نماد کلیک کنید تا جزئیات کامل کندل، فیلترها و دلیل ورود/عدم ورود نمایش داده شود.'));
+      return;
+    }
+
+    const head = el('div', 'inspector-head');
+    const title = el('strong', '', `${sym} (${info.entry_tf || 'M15'})`);
+    const candleStr = info.candle_time ? info.candle_time.replace('T', ' ').slice(5, 16) : 'N/A';
+    const fresh = formatFreshness(info.analyzed_at || info.ts, info.market_open !== false);
+    const meta = el('span', `freshness-pill ${fresh.cls}`, `کندل: ${candleStr} (${fresh.text})`);
+    head.append(title, meta);
+    box.appendChild(head);
+
+    const wrap = el('div', 'stage-pills');
+    const stages = Array.isArray(info.pipeline_stages) ? info.pipeline_stages : [];
+    stages.forEach(st => {
+      const icon = st.status === 'pass' ? '✓' : (st.status === 'fail' ? '✗' : (st.status === 'wait' ? '◷' : '-'));
+      wrap.appendChild(el('span', `stage-pill ${st.status || ''}`, `${st.label} ${icon}${st.detail ? ' (' + st.detail + ')' : ''}`));
+    });
+    box.appendChild(wrap);
+
+    const reason = el('div', '', info.persian_desc || info.thesis || 'در حال پایش...');
+    reason.style.marginTop = '6px';
+    box.appendChild(reason);
+  }
+
+  // --- Master-Detail Watchlist Table ---
   function renderPipelineAudit(theses) {
+    cachedTheses = theses || {};
     const root = $('pipeline-audit-table');
     if (!root) return;
     root.replaceChildren();
-    const entries = Object.entries(theses || {});
+    const entries = Object.entries(cachedTheses);
     if (!entries.length) {
       root.appendChild(el('div', 'empty', 'هنوز هیچ نمادی اسکن نشده است.'));
       return;
     }
 
+    if (!selectedSymbol || !cachedTheses[selectedSymbol]) {
+      selectedSymbol = entries[0][0];
+    }
+
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const htr = document.createElement('tr');
-    ['نماد و بازار', 'زمان کندل و تازگی', 'مراحل فیلتر (Pipeline)', 'وضعیت و دلیل ورود / عدم ورود'].forEach(h => {
+    ['نماد', 'وضعیت / کندل', 'خلاصه پایپ‌لاین'].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       htr.appendChild(th);
@@ -498,52 +575,48 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const tbody = document.createElement('tbody');
     for (const [sym, info] of entries) {
       const tr = document.createElement('tr');
+      tr.className = 'watchlist-row' + (sym === selectedSymbol ? ' selected' : '');
+      tr.addEventListener('click', () => {
+        selectedSymbol = sym;
+        renderPipelineAudit(cachedTheses);
+      });
 
-      // 1. Symbol & Market badge
       const tdSym = el('td');
       const asset = getAssetLabel(sym, info.is_crypto ? 'crypto' : '');
       tdSym.appendChild(el('span', `asset-pill ${asset.cls}`, asset.label));
       tdSym.appendChild(el('strong', '', sym));
       tr.appendChild(tdSym);
 
-      // 2. Candle timestamp & Freshness
       const tdTime = el('td');
-      const candleStr = info.candle_time ? info.candle_time.replace('T', ' ').slice(5, 16) : 'N/A';
-      tdTime.appendChild(el('div', '', `${info.entry_tf || 'M15'} : ${candleStr}`));
       const fresh = formatFreshness(info.analyzed_at || info.ts, info.market_open !== false);
-      tdTime.appendChild(el('span', `freshness-pill ${fresh.cls}`, fresh.text));
+      const candleShort = info.candle_time ? info.candle_time.slice(11, 16) : '';
+      tdTime.appendChild(el('span', `freshness-pill ${fresh.cls}`, `${fresh.text}${candleShort ? ' ' + candleShort : ''}`));
       tr.appendChild(tdTime);
 
-      // 3. Stage-by-Stage Pipeline Pills
-      const tdStages = el('td');
-      const wrap = el('div', 'stage-pills');
+      const tdCat = el('td');
       const stages = Array.isArray(info.pipeline_stages) ? info.pipeline_stages : [];
-      if (stages.length) {
-        stages.forEach(st => {
-          const icon = st.status === 'pass' ? '✓' : (st.status === 'fail' ? '✗' : (st.status === 'wait' ? '◷' : '-'));
-          const pill = el('span', `stage-pill ${st.status || ''}`, `${st.label} ${icon}${st.detail ? ' (' + st.detail + ')' : ''}`);
-          wrap.appendChild(pill);
-        });
-      } else {
-        wrap.appendChild(el('span', 'stage-pill', info.regime || 'PENDING'));
+      const failed = stages.find(s => s.status === 'fail');
+      const wait = stages.find(s => s.status === 'wait');
+      let summaryBadge = info.persian_category || 'پایش';
+      let cls = 'stage-pill';
+      if (info.bias === 'BUY' || info.bias === 'SELL') {
+        summaryBadge = `${info.bias} ✓`;
+        cls += ' pass';
+      } else if (failed) {
+        summaryBadge = `${failed.label} ✗`;
+        cls += ' fail';
+      } else if (wait) {
+        summaryBadge = `${wait.label} ◷`;
+        cls += ' wait';
       }
-      tdStages.appendChild(wrap);
-      tr.appendChild(tdStages);
-
-      // 4. Category + Exact Reason (Entry or Non-Entry)
-      const tdReason = el('td', 'reason-cell');
-      const cat = info.persian_category || 'پایش';
-      let catCls = 'category-tag';
-      if (cat.includes('ورود فعال') || cat.includes('سیگنال')) catCls += ' tag-signal';
-      else if (cat.includes('رد شده') || cat.includes('رول‌اور')) catCls += ' tag-warning';
-      tdReason.appendChild(el('span', catCls, cat));
-      tdReason.appendChild(el('div', '', info.persian_desc || info.thesis || 'در حال پایش...'));
-      tr.appendChild(tdReason);
+      tdCat.appendChild(el('span', cls, summaryBadge));
+      tr.appendChild(tdCat);
 
       tbody.appendChild(tr);
     }
     t.appendChild(tbody);
     root.appendChild(t);
+    renderSymbolInspector(selectedSymbol);
   }
 
   function renderPositions(rows) {
@@ -551,7 +624,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     if (!root) return;
     root.replaceChildren();
     const countBadge = $('pos-count-badge');
-    if (countBadge) countBadge.textContent = `${(rows || []).length} باز`;
+    if (countBadge) countBadge.textContent = String((rows || []).length);
     if (!rows || !rows.length) {
       root.appendChild(el('div', 'empty', 'در حال حاضر هیچ پوزیشن بازی وجود ندارد.'));
       return;
@@ -696,7 +769,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const headerTr = document.createElement('tr');
-    ['نماد', 'جهت و حجم', 'ورود / خروج', 'سود / زیان', 'دلیل ورود و تحلیل'].forEach(h => {
+    ['نماد', 'جهت / حجم', 'ورود / خروج', 'Quant / Gemini', 'سود / زیان', 'دلیل ورود و تحلیل'].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       headerTr.appendChild(th);
@@ -727,6 +800,10 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const exitVal = r.exit_price != null ? String(r.exit_price) : 'باز';
       tr.appendChild(el('td', '', `${entryVal} / ${exitVal}`));
 
+      const qConf = r.ai_confidence != null ? `${r.ai_confidence}%` : '-';
+      const gProb = r.gemini_prob != null ? `${r.gemini_prob}%` : '-';
+      tr.appendChild(el('td', '', `${qConf} / ${gProb}`));
+
       tr.appendChild(el('td', pnlClass, pnlText));
 
       const tdReason = el('td', 'reason-cell');
@@ -743,7 +820,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.appendChild(t);
   }
 
-  // --- Post-Trade Loss Analysis & Adaptive Learning Table ---
   function renderLossAudits(lossAudits, learnedProfiles) {
     const root = $('loss-audits-view');
     const badge = $('loss-audit-badge');
@@ -752,7 +828,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const audits = Array.isArray(lossAudits) ? lossAudits : [];
     const learnedEntries = Object.entries(learnedProfiles || {}).filter(([, v]) => v && v.last_lesson);
 
-    if (badge) badge.textContent = `${audits.length} ضرر بررسی‌شده`;
+    if (badge) badge.textContent = String(audits.length);
     if (!audits.length && !learnedEntries.length) {
       root.appendChild(el('div', 'empty', 'تاکنون هیچ معامله زیان‌دهی ثبت نشده است.'));
       return;
@@ -778,9 +854,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       tr.appendChild(el('td', '', (a.exit_ts || '').replace('T', ' ').slice(5, 16) || 'N/A'));
       tr.appendChild(el('td', 'pill-loss', `${Number(a.profit_loss || 0).toFixed(2)} $`));
       tr.appendChild(el('td', '', a.classification || 'LOSS_CLOSED'));
-      const tdRev = el('td', 'reason-cell', a.review || 'بررسی خودکار ثبت نشده؛ در حال پایش الگوی بعدی.');
-      tr.appendChild(tdRev);
-      tbody.appendChild(tr);
+      tbody.appendChild(tr.appendChild(el('td', 'reason-cell', a.review || 'بررسی خودکار ثبت نشده؛ در حال پایش الگوی بعدی.')).parentElement);
     });
 
     learnedEntries.forEach(([sym, prof]) => {
@@ -797,7 +871,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     root.appendChild(t);
   }
 
-  // --- Main Real-Time Refresh Loop ---
   async function refresh() {
     try {
       if (!csrf) {
@@ -818,12 +891,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
 
       const isRunning = Boolean(proc.running || proc.state === 'RUNNING');
       setTxt('process-state', isRunning ? 'فعال' : 'متوقف');
-      setCls('process-state', `kpi-val ${isRunning ? 'good' : 'bad'}`);
+      setCls('process-state', `ticker-v ${isRunning ? 'good' : 'bad'}`);
       const startEl = $('start-agent');
       const stopEl = $('stop-agent');
       if (startEl) startEl.disabled = isRunning;
       if (stopEl) stopEl.disabled = !isRunning;
-      setTxt('connection', isRunning ? 'ترمینال متصل' : 'آماده');
+      setTxt('connection', isRunning ? 'متصل' : 'آماده');
       setCls('connection', 'telemetry-pill ' + (isRunning ? 'good' : ''));
 
       const dbAlert = $('db-alert');
@@ -840,82 +913,66 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       const bal = Number(acc.balance ?? 30.0);
       if (acc.balance != null) {
         setTxt('live-balance', `$${acc.balance.toFixed(2)}`);
-        setTxt('live-equity', `Equity: $${acc.equity?.toFixed(2) || acc.balance.toFixed(2)}`);
+        setTxt('live-equity', `Eq: $${acc.equity?.toFixed(2) || acc.balance.toFixed(2)}`);
         setTxt('sidebar-account-desc', `لایو دمو (${acc.server || 'MT5'}) · لاگین: ${acc.login || 'N/A'}`);
       } else {
         setTxt('live-balance', `$${bal.toFixed(2)}`);
-        setTxt('live-equity', `Equity: $${bal.toFixed(2)}`);
+        setTxt('live-equity', `Eq: $${bal.toFixed(2)}`);
       }
 
       const todayPnl = Number(overview.today_pnl || 0);
       const todayPct = Number(overview.today_pnl_percent || (bal > 0 ? (todayPnl / bal * 100) : 0));
       setTxt('today-pnl', `${todayPnl >= 0 ? '+' : ''}${todayPnl.toFixed(2)} $`);
-      setCls('today-pnl', `kpi-val num ${todayPnl >= 0 ? 'good' : 'bad'}`);
-      setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}% امروز`);
-      setCls('today-pnl-pct', `kpi-sub num ${todayPnl >= 0 ? 'good' : 'bad'}`);
+      setCls('today-pnl', `ticker-v num ${todayPnl >= 0 ? 'good' : 'bad'}`);
+      setTxt('today-pnl-pct', `${todayPct >= 0 ? '+' : ''}${todayPct.toFixed(2)}%`);
+      setCls('today-pnl-pct', `num ${todayPnl >= 0 ? 'good' : 'bad'}`);
 
       const totalPnl = Number(overview.total_pnl || 0);
       const totalPct = Number(overview.total_pnl_percent || (totalPnl / 30.0 * 100));
       setTxt('total-pnl', `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} $`);
-      setCls('total-pnl', `kpi-val num ${totalPnl >= 0 ? 'good' : 'bad'}`);
-      setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}% بازدهی کل`);
-      setCls('total-pnl-pct', `kpi-sub num ${totalPnl >= 0 ? 'good' : 'bad'}`);
+      setCls('total-pnl', `ticker-v num ${totalPnl >= 0 ? 'good' : 'bad'}`);
+      setTxt('total-pnl-pct', `${totalPct >= 0 ? '+' : ''}${totalPct.toFixed(1)}%`);
+      setCls('total-pnl-pct', `num ${totalPnl >= 0 ? 'good' : 'bad'}`);
 
       setTxt('open-pos', String((pos || []).length));
 
-      // KPIs
       const sum = perf.summary || {};
       const totalTrades = Number(sum.total_trades || (trades || []).length);
       const winRate = Number(sum.win_rate || 0);
       setTxt('kpi-winrate', totalTrades ? `${winRate.toFixed(1)}%` : 'N/A');
-      setTxt('winrate-badge', `وین‌ریت کل: ${totalTrades ? winRate.toFixed(0) + '%' : '0%'}`);
+      setTxt('winrate-badge', `WR: ${totalTrades ? winRate.toFixed(0) + '%' : '0%'}`);
       setTxt('kpi-pf', totalTrades && sum.profit_factor != null ? (sum.profit_factor >= 99 ? 'Max' : Number(sum.profit_factor).toFixed(2)) : 'N/A');
       setTxt('kpi-sharpe', totalTrades >= 2 && sum.sharpe_ratio != null ? Number(sum.sharpe_ratio).toFixed(2) : 'N/A');
       setTxt('kpi-exp', totalTrades && sum.expectancy != null ? `${sum.expectancy >= 0 ? '+' : ''}$${Number(sum.expectancy).toFixed(2)}` : '$0.00');
       setTxt('kpi-dd', totalTrades && sum.max_drawdown != null ? `$${Number(sum.max_drawdown).toFixed(2)} (${sum.max_drawdown_pct || 0}%)` : '$0.00');
 
-      // Crypto vs TradFi Asset Breakdown
       const cStats = sum.crypto_stats || {};
       const tStats = sum.tradfi_stats || {};
       const cPnl = Number(cStats.total_pnl || 0);
       const tPnl = Number(tStats.total_pnl != null ? tStats.total_pnl : totalPnl);
 
       setTxt('crypto-pnl', `${cPnl >= 0 ? '+' : ''}${cPnl.toFixed(2)} $`);
-      setCls('crypto-pnl', `num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : '')}`);
-      setTxt('crypto-pct', `${Number(cStats.return_percent || 0) >= 0 ? '+' : ''}${Number(cStats.return_percent || 0).toFixed(1)}%`);
-      setCls('crypto-pct', `num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : '')}`);
-      setTxt('crypto-count', String(cStats.trades || 0));
-      setTxt('crypto-wl', `${cStats.wins || 0} / ${cStats.losses || 0}`);
-      setTxt('crypto-winrate', cStats.trades ? `${cStats.win_rate}%` : 'N/A');
-      setTxt('crypto-pf', cStats.trades ? String(cStats.profit_factor) : 'N/A');
+      setCls('crypto-pnl', `ticker-v num ${cPnl > 0 ? 'good' : (cPnl < 0 ? 'bad' : '')}`);
+      setTxt('crypto-meta', `${cStats.trades || 0} ترید | WR: ${cStats.trades ? cStats.win_rate + '%' : 'N/A'}`);
 
       setTxt('tradfi-pnl', `${tPnl >= 0 ? '+' : ''}${tPnl.toFixed(2)} $`);
-      setCls('tradfi-pnl', `num ${tPnl >= 0 ? 'good' : 'bad'}`);
-      const retVal = Number(tStats.return_percent != null ? tStats.return_percent : totalPct);
-      setTxt('tradfi-pct', `${retVal >= 0 ? '+' : ''}${retVal.toFixed(1)}%`);
-      setCls('tradfi-pct', `num ${tPnl >= 0 ? 'good' : 'bad'}`);
-      setTxt('tradfi-count', String(tStats.trades != null ? tStats.trades : totalTrades));
-      setTxt('tradfi-wl', `${tStats.wins != null ? tStats.wins : (sum.wins || 0)} / ${tStats.losses != null ? tStats.losses : (sum.losses || 0)}`);
-      setTxt('tradfi-winrate', tStats.trades ? `${tStats.win_rate}%` : (totalTrades ? `${winRate.toFixed(1)}%` : 'N/A'));
-      setTxt('tradfi-pf', tStats.trades ? String(tStats.profit_factor) : String(sum.profit_factor || 'N/A'));
+      setCls('tradfi-pnl', `ticker-v num ${tPnl >= 0 ? 'good' : 'bad'}`);
+      setTxt('tradfi-meta', `${tStats.trades != null ? tStats.trades : totalTrades} ترید | WR: ${tStats.trades ? tStats.win_rate + '%' : (totalTrades ? winRate.toFixed(1) + '%' : 'N/A')}`);
 
       if (theses && Object.keys(theses).length > 0) {
         updateBacktestSymbols(Object.keys(theses));
       }
 
-      // Interactive Equity Curve
       const pts = (sum.equity_points && sum.equity_points.length >= 2) ? sum.equity_points : (sum.equity_curve || []);
       const hasDrawn = renderInteractiveEquityChart(pts);
       const chartMsg = $('chart-empty-msg');
       if (chartMsg) chartMsg.hidden = hasDrawn;
 
-      // Render Unified Pipeline Audit, Positions, Trades, and Loss Audits
       renderPipelineAudit(theses);
       renderPositions(pos);
       renderTrades(trades);
       renderLossAudits(perf.loss_audits || [], perf.learned_profiles || {});
 
-      // Rejections Banner
       const rejections = overview.recent_rejections || [];
       setTxt('rejections-count-badge', `${rejections.length} وتو`);
       const rejBanner = $('rejections-banner');
@@ -924,24 +981,16 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
           rejBanner.hidden = false;
           rejBanner.replaceChildren();
           const strong = document.createElement('strong');
-          strong.textContent = 'آخرین ستاپ‌های وتوشده توسط مدیریت ریسک: ';
+          strong.textContent = 'آخرین وتوهای مدیریت ریسک: ';
           rejBanner.appendChild(strong);
-          const ul = document.createElement('ul');
-          ul.style.margin = '6px 0 0';
-          ul.style.paddingRight = '18px';
-          rejections.forEach(r => {
-            const li = document.createElement('li');
-            const timeStr = r.ts ? r.ts.substring(11, 16) : '';
-            li.textContent = `${r.symbol} (${r.decision}) در ${timeStr}: ${r.persian_reason || (r.reasons && r.reasons.join(', '))}`;
-            ul.appendChild(li);
-          });
-          rejBanner.appendChild(ul);
+          const r0 = rejections[0];
+          const timeStr = r0.ts ? r0.ts.substring(11, 16) : '';
+          rejBanner.appendChild(document.createTextNode(`${r0.symbol} (${r0.decision}) ${timeStr}: ${r0.persian_reason || ''}`));
         } else {
           rejBanner.hidden = true;
         }
       }
 
-      // Live Logs
       const logsEl = $('process-logs');
       if (logsEl) {
         const rawLogs = (proc && Array.isArray(proc.logs) && proc.logs.length) ? proc.logs : [];
@@ -957,7 +1006,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
         }
       }
 
-      setTxt('last-update', `آخرین به‌روزرسانی: ${new Date().toLocaleTimeString('fa-IR')}`);
+      setTxt('last-update', `به‌روزرسانی: ${new Date().toLocaleTimeString('fa-IR')}`);
     } catch (e) {
       console.error('Refresh loop error:', e);
       consecutiveNetErrors++;
@@ -968,7 +1017,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     }
   }
 
-  // --- Backtester & Weekend Self-Train Handlers ---
   $('run-backtest-btn')?.addEventListener('click', async () => {
     const btn = $('run-backtest-btn');
     btn.disabled = true;

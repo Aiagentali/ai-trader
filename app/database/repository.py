@@ -120,7 +120,8 @@ class Repository:
     def save_trade(self, trade: dict):
         cols = ["trade_id", "opened_ts", "symbol", "direction", "entry", "stop_loss",
                 "take_profit", "position_size", "risk_percent", "rr", "market_regime",
-                "setup", "ai_confidence", "thesis", "invalidation", "status", "request_id"]
+                "setup", "ai_confidence", "gemini_prob", "entry_spread",
+                "thesis", "invalidation", "status", "request_id"]
         vals = []
         for c in cols:
             v = trade.get(c)

@@ -1375,3 +1375,179 @@ details p {
   .asset-strip { grid-template-columns: 1fr; }
   .asset-strip-stats { grid-template-columns: repeat(3, 1fr); }
 }
+
+/* ==========================================================================
+   QuantConnect + OpenTerminal Workspace Layout
+   ========================================================================== */
+.ticker-bar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ticker-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ticker-k {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.ticker-v {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.ticker-v.good { color: var(--good); }
+.ticker-v.bad { color: var(--bad); }
+
+.ticker-cell small {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.ticker-cell small.good { color: var(--good); }
+.ticker-cell small.bad { color: var(--bad); }
+
+.ticker-crypto { border-top: 2px solid var(--crypto); }
+.ticker-tradfi { border-top: 2px solid var(--tradfi); }
+
+.workspace-split {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+  align-items: stretch;
+}
+
+.workspace-split .panel-box {
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-mode-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.chart-mode-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 3px;
+  background: var(--surface-header);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.chart-mode-btn.active {
+  background: var(--surface-raised);
+  color: var(--text);
+  border-color: var(--border-light);
+  font-weight: 600;
+}
+
+.watchlist-scroll {
+  max-height: 195px;
+  overflow-y: auto;
+}
+
+.watchlist-row {
+  cursor: pointer;
+}
+
+.watchlist-row.selected td {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--text);
+}
+
+.symbol-inspector {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--surface-header);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.inspector-empty {
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.inspector-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.dock-panel {
+  margin-bottom: 12px;
+}
+
+.dock-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dock-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dock-tab {
+  font-size: 11.5px;
+  padding: 5px 11px;
+  border-radius: 3px;
+  background: var(--surface-header);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.dock-tab.active {
+  background: var(--accent-soft);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.35);
+  font-weight: 600;
+}
+
+.dock-table-scroll {
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+.weekly-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+@media (max-width: 1200px) {
+  .ticker-bar { grid-template-columns: repeat(4, 1fr); }
+  .workspace-split { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .ticker-bar { grid-template-columns: repeat(2, 1fr); }
+  .dock-header { flex-direction: column; align-items: flex-start; }
+}

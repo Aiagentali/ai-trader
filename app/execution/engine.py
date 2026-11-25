@@ -73,6 +73,8 @@ class ExecutionEngine:
             "market_regime": decision.get("market_regime"),
             "setup": decision.get("setup"),
             "ai_confidence": decision.get("confidence"),
+            "gemini_prob": decision.get("gemini_prob"),
+            "entry_spread": (decision.get("market_context") or {}).get("spread"),
             "thesis": decision.get("thesis"),
             "invalidation": decision.get("invalidation"),
             "status": "open",

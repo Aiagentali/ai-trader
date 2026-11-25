@@ -90,7 +90,9 @@ CREATE TABLE IF NOT EXISTS trades (
     profit_loss REAL,
     r_multiple REAL,
     exit_reason TEXT,
-    request_id TEXT
+    request_id TEXT,
+    gemini_prob REAL,
+    entry_spread REAL
 );
 
 CREATE TABLE IF NOT EXISTS trade_reviews (
@@ -181,6 +183,11 @@ def init_db(db_path: str = None) -> None:
     conn = get_connection(db_path)
     try:
         conn.executescript(SCHEMA)
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
+        if "gemini_prob" not in cols:
+            conn.execute("ALTER TABLE trades ADD COLUMN gemini_prob REAL")
+        if "entry_spread" not in cols:
+            conn.execute("ALTER TABLE trades ADD COLUMN entry_spread REAL")
         conn.commit()
     finally:
         conn.close()

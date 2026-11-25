@@ -124,3 +124,27 @@ def test_two_strike_daily_loss_breaker_and_survival_floor(tmp_path):
     res_halt = risk.validate(dec, {"balance": 30.0})
     assert res_halt.approved is False
     assert any("consecutive" in r.lower() for r in res_halt.reasons_reject)
+
+
+def test_weekly_markdown_audit_and_gemini_prob_storage(tmp_path):
+    from app.journal.weekly_audit import generate_weekly_markdown
+    repo = Repository(str(tmp_path / "weekly_test.db"))
+    repo.save_trade({
+        "trade_id": "W1", "opened_ts": "2026-11-24T10:00:00Z", "symbol": "BTCUSD",
+        "direction": "BUY", "entry": 90000.0, "stop_loss": 89700.0,
+        "take_profit": [90600.0], "position_size": 0.01, "risk_percent": 1.0,
+        "rr": 2.0, "market_regime": "TREND_BULLISH", "setup": "QUANT_BULLISH_EMA_PULLBACK",
+        "ai_confidence": 72, "gemini_prob": 84, "entry_spread": 25.0,
+        "thesis": "test", "invalidation": "89700", "status": "open", "request_id": "r1",
+    })
+    repo.close_trade("W1", 89700.0, -3.0, -1.0, "stop_loss_hit")
+    repo.conn.execute(
+        "UPDATE trades SET exit_ts='2026-11-24T11:00:00Z' WHERE trade_id='W1'")
+    repo.conn.commit()
+
+    res = generate_weekly_markdown(repo, output_dir=str(tmp_path / "reports"))
+    md = res["markdown"]
+    assert "BTCUSD" in md
+    assert "80%+" in md
+    assert "MARKET_VARIANCE" in md
+    assert (tmp_path / "reports" / res["filename"]).exists()
