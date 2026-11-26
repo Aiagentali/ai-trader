@@ -3,6 +3,9 @@ import os
 import yaml
 
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SETTINGS_FILE = os.path.join(APP_ROOT, "app", "config", "settings.yaml")
+SYMBOLS_FILE = os.path.join(APP_ROOT, "app", "config", "symbols.yaml")
+RISK_FILE = os.path.join(APP_ROOT, "app", "config", "risk.yaml")
 
 
 def load_yaml(name: str) -> dict:
