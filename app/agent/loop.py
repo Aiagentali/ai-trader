@@ -174,6 +174,9 @@ class Agent:
             # --- Optional Decision AI Gate (Jev-inspired fast classification) ---
             if d in ("BUY", "SELL") and getattr(self, "decision_ai", None) and self.decision_ai.enabled:
                 ai_eval = self.decision_ai.evaluate_setup(decision, decision.get("market_context", {}))
+                self.repo.log_ai_request(
+                    f"decision_{sym}", self.decision_ai.model, 0, 0, 0.0, sym,
+                    "error" if ai_eval.get("source") == "error_fallback" else "ok")
                 stages = decision.setdefault("pipeline_stages", [])
                 if not ai_eval.get("approve", True):
                     log.info(f"{sym} | Decision AI rejected: {ai_eval.get('reason')}")

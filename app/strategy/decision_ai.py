@@ -50,7 +50,9 @@ class DecisionAI:
         try:
             # 1. Native Google Decisions API with gemini-decision-1
             if "decision" in self.model.lower():
-                base_url = getattr(self.client, "base_url", "https://generativelanguage.googleapis.com/v1beta")
+                base_url = getattr(self.client, "base_url", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
+                if "generativelanguage.googleapis.com" in base_url and not base_url.endswith("/v1beta"):
+                    base_url = f"{base_url}/v1beta"
                 url = f"{base_url}/decisions"
                 api_key = getattr(self.client, "api_key", "")
 

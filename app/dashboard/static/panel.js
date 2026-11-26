@@ -446,7 +446,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     testAiBtn.disabled = true;
     out.textContent = 'در حال ارسال درخواست آزمایشی به سرور گوگل...';
     try {
-      const res = await api('/api/test_ai', { model: $('cfg-ai-model').value });
+      const res = await api('/api/ai/test', { model: $('cfg-ai-model').value });
       out.textContent = `پاسخ موفق دریافت شد! تاخیر: ${res.latency_ms}ms\n${res.content || JSON.stringify(res, null, 2)}`;
     } catch (e) {
       out.textContent = `خطا در برقراری ارتباط: ${e.message}`;

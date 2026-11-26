@@ -282,7 +282,10 @@ class OwnedProcess:
             env = os.environ.copy()
             # .env values override inherited settings only in this owned child.
             env.update({FIELDS[k]: str(v) for k, v in values.items()})
-            env["AI_PROVIDER"] = "openai-compat"
+            if "generativelanguage.googleapis.com" in str(values.get("base_url", "")):
+                env["AI_PROVIDER"] = "gemini"
+            else:
+                env["AI_PROVIDER"] = "openai-compat"
             env["LIVE_TRADING_ENABLED"] = "false"
             python_bin = sys.executable
             venv_bin = Path(root) / ".venv" / "Scripts" / "python.exe"
@@ -454,9 +457,33 @@ def register_control(app, get_repo):
             return jsonify(ok=False, error=str(exc)), 400
         started = monotonic()
         try:
-            provider = OpenAICompatProvider(api_key=values["api_key"], base_url=values["base_url"], timeout=10)
-            result = provider.chat(system="You are a connectivity test. Reply only OK.", user="Reply OK.", model=model, max_tokens=32, temperature=0)
-            content = str(result.get("content", ""))
+            if "decision" in model.lower():
+                import json as _json, urllib.request as _req
+                b_url = values["base_url"].rstrip("/")
+                if "generativelanguage.googleapis.com" in b_url and not b_url.endswith("/v1beta"):
+                    b_url = f"{b_url}/v1beta"
+                r = _req.Request(
+                    f"{b_url}/decisions",
+                    data=_json.dumps({
+                        "model": "gemini-decision-1",
+                        "input": "EURUSD BUY connectivity check: H1 bullish, ADX 25, RR 1.8.",
+                        "questions": {"approve_trade": {"type": "noul", "instructions": "Approve test setup?"}}
+                    }).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "x-goog-api-key": values["api_key"]}
+                )
+                with _req.urlopen(r, timeout=10) as resp:
+                    d_res = _json.loads(resp.read().decode("utf-8"))
+                ans = d_res.get("answers", {}).get("approve_trade", {})
+                content = f"Decision API OK (prob={ans.get('noul')}, conf={ans.get('confidence')})"
+            elif "generativelanguage.googleapis.com" in values["base_url"]:
+                from app.ai.client import GeminiProvider
+                provider = GeminiProvider(api_key=values["api_key"], base_url=values["base_url"], timeout=10)
+                result = provider.chat(system="You are a connectivity test. Reply only OK.", user="Reply OK.", model=model, max_tokens=32, temperature=0)
+                content = str(result.get("content", ""))
+            else:
+                provider = OpenAICompatProvider(api_key=values["api_key"], base_url=values["base_url"], timeout=10)
+                result = provider.chat(system="You are a connectivity test. Reply only OK.", user="Reply OK.", model=model, max_tokens=32, temperature=0)
+                content = str(result.get("content", ""))
             if values["api_key"]:
                 content = content.replace(values["api_key"], "[redacted]")
             return jsonify(ok=True, model=model, latency_ms=round((monotonic()-started)*1000), content=content[:2048], error=None)
